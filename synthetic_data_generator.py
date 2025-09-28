@@ -1,5 +1,5 @@
 """
-Pre-generate large synthetic datasets using TTS for reuse across experiments.
+Pre-generate large synthetic datasets using gTTS for reuse across experiments.
 
 This module creates comprehensive synthetic datasets upfront, allowing for:
 1. Faster experiment iteration (no TTS during experiments)
@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
-from TTS.api import TTS
+from gtts import gTTS
 import logging
 from dataclasses import dataclass
 from tqdm import tqdm
@@ -35,7 +35,7 @@ class SyntheticDatasetConfig:
     samples_per_keyword: int = 1000  # Large pool for sampling
     
     # TTS configuration
-    tts_model_name: str = "tts_models/en/ljspeech/tacotron2-DDC"
+    tts_model_name: str = "gtts"  # Keep for compatibility
     
     # Audio parameters
     sample_rate: int = 16000
@@ -129,8 +129,23 @@ class TextVariationGenerator:
         ]
         return phrases
 
+class GTTSEngine:
+    """Simple gTTS-based TTS engine"""
+    
+    def __init__(self, model_name: str = "gtts"):
+        # model_name ignored for gTTS compatibility
+        logger.info("Using gTTS (Google Text-to-Speech)")
+    
+    def tts_to_file(self, text: str, file_path: str):
+        """Synthesize text to file using gTTS"""
+        # Add variation: use slow speech for certain patterns
+        slow = '...' in text or len(text) > 8
+        
+        tts = gTTS(text=text, lang='en', slow=slow)
+        tts.save(file_path)
+
 class SyntheticDatasetGenerator:
-    """Generates large-scale synthetic datasets using TTS"""
+    """Generates large-scale synthetic datasets using gTTS"""
     
     def __init__(self, config: SyntheticDatasetConfig):
         self.config = config
@@ -155,14 +170,14 @@ class SyntheticDatasetGenerator:
     
     def _initialize_tts(self):
         """Initialize TTS model"""
-        logger.info(f"Initializing TTS model: {self.config.tts_model_name}")
+        logger.info(f"Initializing gTTS engine")
         
         try:
-            self.tts = TTS(model_name=self.config.tts_model_name)
-            logger.info("TTS model loaded successfully")
+            self.tts = GTTSEngine(self.config.tts_model_name)
+            logger.info("gTTS engine loaded successfully")
         except Exception as e:
-            logger.error(f"Failed to load TTS model: {e}")
-            raise RuntimeError(f"TTS initialization failed: {e}")
+            logger.error(f"Failed to load gTTS engine: {e}")
+            raise RuntimeError(f"gTTS initialization failed: {e}")
     
     def _generate_sample_id(self, keyword: str, text_variant: str, 
                            variation_idx: int) -> str:
@@ -177,11 +192,11 @@ class SyntheticDatasetGenerator:
         temp_file = self.output_dir / f"temp_{sample_id}.wav"
         
         try:
-            # Synthesize with TTS
-            self.tts.tts_to_file(text=text, file_path=str(temp_file))
+            # Synthesize with gTTS
+            self.tts.tts_to_file(text, str(temp_file))
             
             if not temp_file.exists():
-                raise RuntimeError(f"TTS did not generate file for: {text}")
+                raise RuntimeError(f"gTTS did not generate file for: {text}")
             
             # Load and preprocess
             waveform, sr = torchaudio.load(temp_file)
@@ -402,6 +417,7 @@ class SyntheticDatasetGenerator:
                 'sample_rate': self.config.sample_rate,
                 'duration_seconds': self.config.max_audio_length / self.config.sample_rate
             },
+            'tts_method': 'gtts',
             'files': {
                 'audio_tensor': 'synthetic_audio.pt',
                 'metadata': 'synthetic_metadata.csv',
@@ -444,7 +460,8 @@ class SyntheticDatasetGenerator:
                 'energy_statistics': energy_stats.to_dict(),
                 'amplitude_statistics': amplitude_stats.to_dict(),
                 'failed_samples': len(self.generation_metadata['failed_samples'])
-            }
+            },
+            'tts_method': 'gtts'
         }
         
         # Save quality report
