@@ -1,8 +1,17 @@
 """
 Experimental configuration for class imbalance augmentation study.
 """
-from dataclasses import dataclass
+
+import os
+from dataclasses import dataclass, field
 from typing import List
+
+# Simple path helper for Colab
+def get_colab_path(default_path: str, env_var: str) -> str:
+    """Use environment variable if in Colab, otherwise default"""
+    return os.environ.get(env_var, default_path)
+
+
 
 @dataclass
 class ExperimentConfig:
