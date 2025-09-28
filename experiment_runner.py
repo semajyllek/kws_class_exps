@@ -31,8 +31,8 @@ class ExperimentRunner:
         )
         
         self.augmentation_manager = AugmentationManager(
-            tts_model_name=config.tts_model_name,
-            fgsm_epsilon=config.fgsm_epsilon
+            fgsm_epsilon=config.fgsm_epsilon,
+            synthetic_dataset_path=config.synthetic_dataset_path
         )
         
         self.model_trainer = ModelTrainer()
