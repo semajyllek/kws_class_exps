@@ -43,7 +43,7 @@ class GSCDatasetManager:
         """Extract and preprocess audio samples with labels"""
         audio_files = []
         labels = []
-        
+          
         logger.info(f"Extracting samples (max: {max_samples or 'unlimited'})")
         
         for i, (waveform, sample_rate, label, speaker_id, utterance_number) in enumerate(dataset):
@@ -60,6 +60,13 @@ class GSCDatasetManager:
             else:
                 logger.warning(f"Skipping invalid audio sample {i}")
         
+
+        # TODO: delete later
+        from collections import Counter
+        label_counts = Counter(labels)
+        print(f"Available labels: {dict(label_counts.most_common(10))}")
+        
+
         logger.info(f"Extracted {len(audio_files)} valid samples")
         return audio_files, labels
     
