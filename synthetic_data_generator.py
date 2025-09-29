@@ -54,6 +54,8 @@ class SyntheticDatasetConfig:
     validate_samples: bool = True
     min_energy_threshold: float = 1e-6  # Minimum audio energy
     
+
+
 def create_large_synthetic_config() -> SyntheticDatasetConfig:
     """Create configuration for large synthetic dataset"""
     return SyntheticDatasetConfig(
@@ -64,6 +66,7 @@ def create_large_synthetic_config() -> SyntheticDatasetConfig:
         dataset_name='gsc_synthetic_large'
     )
 
+
 def create_quick_synthetic_config() -> SyntheticDatasetConfig:
     """Create configuration for quick testing"""
     return SyntheticDatasetConfig(
@@ -73,6 +76,62 @@ def create_quick_synthetic_config() -> SyntheticDatasetConfig:
         acoustic_variations_per_text=2,
         dataset_name='gsc_synthetic_quick'
     )
+
+def generate_comprehensive_dataset(
+    keywords: List[str],
+    samples_per_keyword: int,
+    output_dir: str,
+    dataset_name: str = 'gsc_synthetic_comprehensive'
+) -> str:
+    """
+    Generate a comprehensive synthetic dataset for reuse across experiments.
+    
+    Args:
+        keywords: List of keywords to generate
+        samples_per_keyword: Number of samples per keyword
+        output_dir: Base output directory
+        dataset_name: Name for this dataset
+        
+    Returns:
+        Path to generated dataset
+    """
+    config = SyntheticDatasetConfig(
+        target_keywords=keywords,
+        samples_per_keyword=samples_per_keyword,
+        text_variations_per_keyword=5,
+        acoustic_variations_per_text=3,
+        output_dir=output_dir,
+        dataset_name=dataset_name,
+        save_audio_files=True
+    )
+    
+    logger.info(f"Generating comprehensive dataset: {samples_per_keyword * len(keywords)} total samples")
+    
+    generator = SyntheticDatasetGenerator(config)
+    dataset_path = generator.generate_complete_dataset()
+    
+    return dataset_path
+
+def check_dataset_exists(dataset_path: str) -> Dict[str, any]:
+    """
+    Check if a synthetic dataset exists and return its info.
+    
+    Args:
+        dataset_path: Path to dataset directory
+        
+    Returns:
+        Dictionary with 'exists' bool and 'info' dict if exists
+    """
+    info_file = Path(dataset_path) / 'dataset_info.json'
+    
+    if info_file.exists():
+        with open(info_file, 'r') as f:
+            info = json.load(f)
+        return {'exists': True, 'info': info}
+    else:
+        return {'exists': False, 'info': None}
+
+
 
 class TextVariationGenerator:
     """Generates diverse text variations for TTS input"""
@@ -129,6 +188,9 @@ class TextVariationGenerator:
         ]
         return phrases
 
+
+
+
 class GTTSEngine:
     """Simple gTTS-based TTS engine"""
     
@@ -143,6 +205,9 @@ class GTTSEngine:
         
         tts = gTTS(text=text, lang='en', slow=slow)
         tts.save(file_path)
+
+
+
 
 class SyntheticDatasetGenerator:
     """Generates large-scale synthetic datasets using gTTS"""
