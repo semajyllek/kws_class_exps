@@ -359,7 +359,7 @@ class SyntheticDatasetLoader:
         
         return [all_audio[i] for i in indices], [all_labels[i] for i in indices]
     
-    def get_statistics(self) -> Dict:
+    def get_dataset_statistics(self) -> Dict:
         """Get dataset statistics."""
         return {
             'total_samples': len(self.metadata_df),
