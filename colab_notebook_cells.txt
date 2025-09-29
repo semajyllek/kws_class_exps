@@ -88,14 +88,15 @@ dataset_path = f"{os.environ['COLAB_SYNTHETIC_DIR']}/gsc_synthetic_comprehensive
 result = check_dataset_exists(dataset_path)
 
 if result['exists']:
-    print("Comprehensive synthetic dataset already exists!")
+    print("✓ Comprehensive synthetic dataset already exists!")
     print(f"Total samples: {result['info']['total_samples']}")
     print(f"Samples per keyword: {result['info']['samples_per_keyword']}")
+    print("\nSkip Cell 5 and go directly to Cell 6.")
 else:
-    print("Dataset not found. Run generation cell below.")
+    print("✗ Dataset not found. Run Cell 5 to generate it.")
 
 
-CELL 5: Generate Comprehensive Dataset (Run Once - 30-45 min)
+CELL 5: Generate Comprehensive Dataset (Run Once - 45-60 min)
 --------------------------------------------------------------
 from synthetic_data_generator import generate_comprehensive_dataset
 import os
@@ -108,7 +109,8 @@ if 'COLAB_SYNTHETIC_DIR' not in os.environ:
 
 # Generate comprehensive dataset
 print("Generating comprehensive synthetic dataset...")
-print("This will take 30-45 minutes but only needs to be done once")
+print("Target: 500 samples per keyword × 4 keywords = 2000 total samples")
+print("This will take 45-60 minutes but only needs to be done once\n")
 
 dataset_path = generate_comprehensive_dataset(
     keywords=['yes', 'no', 'up', 'down'],
@@ -117,37 +119,76 @@ dataset_path = generate_comprehensive_dataset(
     dataset_name='gsc_synthetic_comprehensive'
 )
 
-print(f"\nDataset created at: {dataset_path}")
+print(f"\n✓ Dataset created at: {dataset_path}")
 print("This dataset can be reused for all future experiments")
 
 
 CELL 6: Inspect Dataset Quality
 --------------------------------
-from dataset_inspection import inspect_dataset_quality
+from synthetic_data_generator import SyntheticDatasetLoader
 import os
 
 dataset_path = f"{os.environ['COLAB_SYNTHETIC_DIR']}/gsc_synthetic_comprehensive"
 
-# Run comprehensive inspection
-inspect_dataset_quality(
-    dataset_path=dataset_path,
-    keywords=['yes', 'no', 'up', 'down']
-)
+# Load and inspect dataset
+loader = SyntheticDatasetLoader(dataset_path)
+stats = loader.get_statistics()
+
+print("SYNTHETIC DATASET STATISTICS")
+print("="*50)
+print(f"Total samples: {stats['total_samples']}")
+print(f"Samples per keyword: {stats['samples_per_keyword']}")
+print(f"Unique text variants: {stats['unique_text_variants']}")
+print(f"Base samples: {stats['base_samples']}")
+print(f"\nAudio Quality:")
+print(f"  Mean energy: {stats['audio_quality']['mean_energy']:.4f}")
+print(f"  Mean max amplitude: {stats['audio_quality']['mean_max_amplitude']:.4f}")
+
+# Show sample metadata
+print("\n\nMETADATA SAMPLE")
+print("="*50)
+print(loader.metadata_df.head(10))
 
 
 CELL 7: Listen to Audio Samples (Optional)
 -------------------------------------------
-from dataset_inspection import play_audio_samples
+from synthetic_data_generator import SyntheticDatasetLoader
+from IPython.display import Audio, display
 import os
 
 dataset_path = f"{os.environ['COLAB_SYNTHETIC_DIR']}/gsc_synthetic_comprehensive"
+loader = SyntheticDatasetLoader(dataset_path)
 
-# Play 3 samples per keyword
-play_audio_samples(
-    dataset_path=dataset_path,
-    keywords=['yes', 'no', 'up', 'down'],
-    samples_per_keyword=3
-)
+print("AUDIO SAMPLES (Click to play)")
+print("="*50)
+
+keywords = ['yes', 'no', 'up', 'down']
+samples_per_keyword = 3
+
+for keyword in keywords:
+    print(f"\n--- Keyword: '{keyword}' ---")
+    
+    keyword_meta = loader.metadata_df[loader.metadata_df['keyword'] == keyword]
+    
+    if len(keyword_meta) == 0:
+        print(f"  No samples found for '{keyword}'")
+        continue
+    
+    sample_indices = keyword_meta.sample(
+        min(samples_per_keyword, len(keyword_meta))
+    ).index.tolist()
+    
+    for i, idx in enumerate(sample_indices):
+        row = loader.metadata_df.loc[idx]
+        audio_sample = loader.audio_tensor[idx]
+        
+        print(f"\nSample {i+1}:")
+        print(f"  Text: '{row['text_variant']}'")
+        print(f"  Is base: {row['is_base_sample']}")
+        print(f"  Energy: {row['audio_energy']:.4f}")
+        
+        audio_np = audio_sample.squeeze().numpy()
+        display(Audio(audio_np, rate=16000))
 
 
 CELL 8: Run Experiments with Comprehensive Dataset
@@ -248,7 +289,7 @@ Cell Execution Order:
 Time Estimates:
 ---------------
 - Setup (Cells 1-3): 5 minutes
-- Dataset generation (Cell 5): 30-45 minutes (one-time)
+- Dataset generation (Cell 5): 45-60 minutes (one-time, generates ~500 samples/keyword)
 - Experiments (Cell 8): 30-90 minutes
 - Total first run: 1.5-2.5 hours
 - Subsequent runs: 30-90 minutes (skip dataset generation)
@@ -257,7 +298,7 @@ Important Variables:
 --------------------
 - project_dir: /content/drive/MyDrive/kws_class_experiments
 - repo_url: Replace with your GitHub repository URL
-- Dataset name: gsc_synthetic_comprehensive (500 samples/keyword)
+- Dataset name: gsc_synthetic_comprehensive (~500 samples/keyword = ~2000 total)
 
 Troubleshooting:
 ----------------
@@ -265,3 +306,13 @@ Troubleshooting:
 - If experiments fail with "0 positive samples": Use full dataset
 - If TTS fails: gTTS should work in Colab by default
 - If download stalls: Restart cell, it will resume
+- If Cell 5 shows only 15 samples/keyword: You're using old code, update synthetic_data_generator.py
+
+Key Changes from Original:
+---------------------------
+- Cell 4: Better visual feedback with checkmarks
+- Cell 5: Accurate time estimate (45-60 min for 500 samples/keyword)
+- Cell 6: Direct use of SyntheticDatasetLoader (no dataset_inspection.py needed)
+- Cell 7: Inline audio playback (no dataset_inspection.py needed)
+- All cells now work with refactored synthetic_data_generator.py
+- Removed dependency on dataset_inspection.py (can be deleted)
