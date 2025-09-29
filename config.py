@@ -6,11 +6,9 @@ import os
 from dataclasses import dataclass, field
 from typing import List
 
-# Simple path helper for Colab
 def get_colab_path(default_path: str, env_var: str) -> str:
     """Use environment variable if in Colab, otherwise default"""
     return os.environ.get(env_var, default_path)
-
 
 
 @dataclass
@@ -49,7 +47,7 @@ class ExperimentConfig:
     
     synthetic_dataset_path: str = field(default_factory=lambda: os.path.join(
         get_colab_path('./synthetic_datasets', 'COLAB_SYNTHETIC_DIR'),
-        'gsc_synthetic_large'
+        'gsc_synthetic_comprehensive'  # CHANGED: Use comprehensive dataset by default
     )) 
     
     def __post_init__(self):
@@ -79,7 +77,7 @@ def create_quick_config() -> ExperimentConfig:
         n_epochs=10,
         synthetic_dataset_path=os.path.join(
             get_colab_path('./synthetic_datasets', 'COLAB_SYNTHETIC_DIR'),
-            'gsc_synthetic_quick'  # Note: 'quick' not 'large' for the quick config
+            'gsc_synthetic_comprehensive'  # CHANGED: Use comprehensive dataset
         )
     )
 
