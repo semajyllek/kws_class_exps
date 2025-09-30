@@ -26,7 +26,7 @@ class GSCDatasetManager:
         self.dataset_size_limits = {
             'small': 1000,
             'medium': 5000,
-            'large': 20000,
+            'large': 10000,
             'full': None
         }
         
