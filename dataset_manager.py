@@ -111,7 +111,16 @@ class GSCDatasetManager:
     def create_imbalanced_split(self, audio_files: List[torch.Tensor], 
                               labels: List[str], target_keywords: List[str], 
                               imbalance_ratio: float) -> Tuple[List[torch.Tensor], List[str]]:
-        """Create dataset with specified imbalance ratio"""
+        """
+        Create dataset with specified imbalance ratio.
+        
+        imbalance_ratio = n_positive / n_negative
+        
+        For example:
+        - ratio=0.1 means 10% positive, 90% negative
+        - ratio=0.5 means 33% positive, 67% negative  
+        - ratio=1.0 means 50% positive, 50% negative
+        """
         
         print(f"\n⚖️  Creating imbalanced split (ratio: {imbalance_ratio})")
         
@@ -122,25 +131,49 @@ class GSCDatasetManager:
         positive_indices = [i for i, label in enumerate(binary_labels) if label == 'keyword']
         negative_indices = [i for i, label in enumerate(binary_labels) if label == 'non_keyword']
         
-        n_positive = len(positive_indices)
-        n_negative = len(negative_indices)
+        n_positive_available = len(positive_indices)
+        n_negative_available = len(negative_indices)
         
-        logger.info(f"Original distribution: {n_positive} positive, {n_negative} negative")
+        logger.info(f"Available: {n_positive_available} positive, {n_negative_available} negative")
         
-        # Calculate target numbers based on imbalance ratio
+        # FIXED: Calculate target counts to achieve exact imbalance ratio
+        # Strategy: Keep as many positives as possible, then calculate negatives needed
+        # to achieve target ratio: ratio = n_pos / n_neg, so n_neg = n_pos / ratio
+        
         if imbalance_ratio >= 1.0:
-            target_negative = n_positive
+            # Balanced or positive-heavy: keep all positives, match with negatives
+            n_positive = n_positive_available
+            n_negative = n_positive  # 1:1 ratio
         else:
-            target_negative = int(n_positive / imbalance_ratio)
+            # Imbalanced: keep positives, calculate negatives needed
+            n_positive = n_positive_available
+            n_negative = int(n_positive / imbalance_ratio)
+            
+            # Check if we have enough negatives
+            if n_negative > n_negative_available:
+                # Not enough negatives, reduce positives instead
+                n_negative = n_negative_available
+                n_positive = int(n_negative * imbalance_ratio)
+                
+                logger.warning(f"Not enough negatives. Reducing positives to {n_positive}")
         
-        # Subsample negative class if needed
-        if len(negative_indices) > target_negative:
-            negative_indices = np.random.choice(
-                negative_indices, target_negative, replace=False
+        # Sample the required number of samples
+        if n_positive < n_positive_available:
+            selected_positive = np.random.choice(
+                positive_indices, n_positive, replace=False
             ).tolist()
+        else:
+            selected_positive = positive_indices
+        
+        if n_negative < n_negative_available:
+            selected_negative = np.random.choice(
+                negative_indices, n_negative, replace=False
+            ).tolist()
+        else:
+            selected_negative = negative_indices
         
         # Combine selected indices
-        selected_indices = positive_indices + negative_indices
+        selected_indices = selected_positive + selected_negative
         np.random.shuffle(selected_indices)
         
         # Create new dataset
@@ -198,9 +231,16 @@ class GSCDatasetManager:
         test_audio = [audio_files[i] for i in test_indices]
         test_labels = [labels[i] for i in test_indices]
         
-        print(f"✓ Train: {len(train_audio)} samples, Test: {len(test_audio)} samples")
+        # Log class distribution in splits
+        train_pos = sum(1 for l in train_labels if l == 'keyword')
+        train_neg = sum(1 for l in train_labels if l == 'non_keyword')
+        test_pos = sum(1 for l in test_labels if l == 'keyword')
+        test_neg = sum(1 for l in test_labels if l == 'non_keyword')
         
-        logger.info(f"Train split: {len(train_audio)} samples")
-        logger.info(f"Test split: {len(test_audio)} samples")
+        print(f"✓ Train: {len(train_audio)} samples ({train_pos} pos, {train_neg} neg)")
+        print(f"✓ Test: {len(test_audio)} samples ({test_pos} pos, {test_neg} neg)")
+        
+        logger.info(f"Train split: {len(train_audio)} samples ({train_pos} pos, {train_neg} neg)")
+        logger.info(f"Test split: {len(test_audio)} samples ({test_pos} pos, {test_neg} neg)")
         
         return train_audio, train_labels, test_audio, test_labels

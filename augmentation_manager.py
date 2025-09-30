@@ -97,30 +97,29 @@ class AugmentationManager:
         """Set target model for adversarial generation"""
         self.adversarial_augmenter.set_target_model(model)
     
+   
     def calculate_augmentation_requirements(self, labels: List[str], 
-                                          target_ratio: float) -> Dict[str, int]:
-        """Calculate how many samples needed for each augmentation type"""
-        
+                                      target_ratio: float) -> Dict[str, int]:
+        """
+        Calculate samples needed to balance training set.
+        Note: target_ratio is the IMBALANCE that was created, not the target after augmentation.
+        """
         n_positive = sum(1 for label in labels if label == 'keyword')
         n_negative = sum(1 for label in labels if label == 'non_keyword')
-        
-        # Calculate target positive samples
-        if target_ratio >= 1.0:
-            target_positive = n_negative
-        else:
-            target_positive = max(n_positive, int(n_negative * target_ratio))
-        
+    
+        # For augmentation methods: balance the training set (bring to 1:1)
+        target_positive = n_negative
         samples_needed = max(0, target_positive - n_positive)
-        
+    
         return {
             'current_positive': n_positive,
             'current_negative': n_negative,
             'target_positive': target_positive,
             'samples_needed': samples_needed,
-            'current_ratio': n_positive / n_negative if n_negative > 0 else float('inf'),
-            'target_ratio': target_ratio
+            'current_ratio': n_positive / n_negative if n_negative > 0 else float('inf')
         }
-    
+
+ 
     def apply_synthetic_augmentation(self, keywords: List[str], 
                                    n_samples: int, 
                                    random_state: Optional[int] = None) -> Tuple[List[torch.Tensor], List[str]]:
@@ -199,7 +198,7 @@ class AugmentationManager:
         
         # Apply appropriate method
         if method == 'none':
-            aug_audio, aug_labels = [], []
+            return audio_files, labels
             
         elif method == 'synthetic':
             aug_audio, aug_labels = self.apply_synthetic_augmentation(
@@ -228,8 +227,9 @@ class AugmentationManager:
         final_neg = sum(1 for label in combined_labels if label == 'non_keyword')
         final_ratio = final_pos / final_neg if final_neg > 0 else float('inf')
         
-        logger.info(f"Final dataset: {final_pos} positive, {final_neg} negative "
-                   f"(ratio: {final_ratio:.3f})")
+        logger.info(f"Final dataset after augmentation:")
+        logger.info(f"  {final_pos} positive, {final_neg} negative (ratio: {final_ratio:.3f})")
+        logger.info(f"  Added {len(aug_audio)} augmented samples")
         
         return combined_audio, combined_labels
     
