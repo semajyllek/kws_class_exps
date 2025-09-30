@@ -70,7 +70,7 @@ def create_quick_config() -> ExperimentConfig:
     return ExperimentConfig(
         dataset_version='v2',
         target_keywords=['yes', 'no', 'up', 'down'],
-        dataset_sizes=['full'],
+        dataset_sizes=['large'],
         imbalance_ratios=[0.1, 0.5, 1.0],
         augmentation_methods=['none', 'synthetic', 'adversarial'],
         n_trials=2,
