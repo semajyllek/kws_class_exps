@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List, Tuple, Dict
 from collections import Counter
 import logging
+from tqdm import tqdm
 
 from audio_processing import AudioProcessor
 
@@ -43,30 +44,44 @@ class GSCDatasetManager:
         """Extract and preprocess audio samples with labels"""
         audio_files = []
         labels = []
-          
+        
+        # Get dataset length for progress bar
+        try:
+            total = len(dataset) if max_samples is None else min(len(dataset), max_samples)
+        except:
+            total = max_samples
+        
         logger.info(f"Extracting samples (max: {max_samples or 'unlimited'})")
+        print(f"\n📂 Loading audio samples from Google Speech Commands...")
         
-        for i, (waveform, sample_rate, label, speaker_id, utterance_number) in enumerate(dataset):
-            if max_samples and i >= max_samples:
-                break
-            
-            # Preprocess audio
-            processed_audio = self.audio_processor.preprocess_audio(waveform, sample_rate)
-            
-            # Validate processed audio
-            if self.audio_processor.validate_audio(processed_audio):
-                audio_files.append(processed_audio)
-                labels.append(label)
-            else:
-                logger.warning(f"Skipping invalid audio sample {i}")
+        # Add progress bar
+        with tqdm(total=total, desc="Processing audio", unit="samples") as pbar:
+            for i, (waveform, sample_rate, label, speaker_id, utterance_number) in enumerate(dataset):
+                if max_samples and i >= max_samples:
+                    break
+                
+                # Preprocess audio
+                processed_audio = self.audio_processor.preprocess_audio(waveform, sample_rate)
+                
+                # Validate processed audio
+                if self.audio_processor.validate_audio(processed_audio):
+                    audio_files.append(processed_audio)
+                    labels.append(label)
+                else:
+                    logger.warning(f"Skipping invalid audio sample {i}")
+                
+                # Update progress bar
+                pbar.update(1)
+                
+                # Update description every 1000 samples
+                if i % 1000 == 0 and i > 0:
+                    pbar.set_postfix({'valid': len(audio_files), 'invalid': i - len(audio_files)})
         
-
-        # TODO: delete later
-        from collections import Counter
+        # Log label distribution
         label_counts = Counter(labels)
-        print(f"Available labels: {dict(label_counts.most_common(10))}")
+        print(f"\n✓ Loaded {len(audio_files)} valid samples")
+        print(f"📊 Top labels: {dict(label_counts.most_common(10))}")
         
-
         logger.info(f"Extracted {len(audio_files)} valid samples")
         return audio_files, labels
     
@@ -74,6 +89,12 @@ class GSCDatasetManager:
         """Load dataset with specified size constraint"""
         dataset = self.load_raw_dataset()
         max_samples = self.dataset_size_limits[size]
+        
+        if max_samples:
+            print(f"📏 Loading {size} dataset (max {max_samples} samples)")
+        else:
+            print(f"📏 Loading full dataset (this may take 5-10 minutes)")
+        
         return self.extract_audio_labels(dataset, max_samples)
     
     def convert_to_binary_labels(self, labels: List[str], 
@@ -91,6 +112,8 @@ class GSCDatasetManager:
                               labels: List[str], target_keywords: List[str], 
                               imbalance_ratio: float) -> Tuple[List[torch.Tensor], List[str]]:
         """Create dataset with specified imbalance ratio"""
+        
+        print(f"\n⚖️  Creating imbalanced split (ratio: {imbalance_ratio})")
         
         # Convert to binary labels
         binary_labels = self.convert_to_binary_labels(labels, target_keywords)
@@ -129,6 +152,8 @@ class GSCDatasetManager:
         final_neg = sum(1 for label in new_labels if label == 'non_keyword')
         actual_ratio = final_pos / final_neg if final_neg > 0 else float('inf')
         
+        print(f"✓ Created: {final_pos} positive, {final_neg} negative (actual ratio: {actual_ratio:.3f})")
+        
         logger.info(f"Created imbalanced dataset: {final_pos} positive, {final_neg} negative")
         logger.info(f"Target ratio: {imbalance_ratio:.3f}, Actual ratio: {actual_ratio:.3f}")
         
@@ -141,6 +166,8 @@ class GSCDatasetManager:
         
         if random_state is not None:
             np.random.seed(random_state)
+        
+        print(f"\n✂️  Splitting into train/test (test ratio: {test_ratio})")
         
         # Get indices for each class
         positive_indices = [i for i, label in enumerate(labels) if label == 'keyword']
@@ -170,6 +197,8 @@ class GSCDatasetManager:
         train_labels = [labels[i] for i in train_indices]
         test_audio = [audio_files[i] for i in test_indices]
         test_labels = [labels[i] for i in test_indices]
+        
+        print(f"✓ Train: {len(train_audio)} samples, Test: {len(test_audio)} samples")
         
         logger.info(f"Train split: {len(train_audio)} samples")
         logger.info(f"Test split: {len(test_audio)} samples")
