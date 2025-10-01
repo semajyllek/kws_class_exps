@@ -5,7 +5,7 @@ import torch
 from typing import List, Tuple, Dict, Optional
 import logging
 
-from synthetic_data_generator import SyntheticDatasetLoader
+from synthetic_data_loader import SyntheticDatasetLoader
 
 logger = logging.getLogger(__name__)
 
