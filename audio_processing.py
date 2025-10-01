@@ -50,6 +50,24 @@ class AudioProcessor:
             waveform = resampler(waveform)
         return waveform
     
+    def normalize_to_target_rms(self, waveform: torch.Tensor, 
+        target_rms: float = 0.1) -> torch.Tensor:
+        """Normalize audio to target RMS energy"""
+        current_rms = torch.sqrt(torch.mean(waveform ** 2))
+    
+        if current_rms > 1e-8:
+            scale_factor = target_rms / current_rms
+            normalized = waveform * scale_factor
+        
+            # Prevent clipping
+            max_val = normalized.abs().max()
+            if max_val > 1.0:
+                normalized = normalized / max_val * 0.95
+        
+            return normalized
+        else:
+            return waveform
+
     def preprocess_audio(self, waveform: torch.Tensor, 
                         original_sr: int) -> torch.Tensor:
         """Complete preprocessing pipeline"""

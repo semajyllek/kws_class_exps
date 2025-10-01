@@ -15,41 +15,49 @@ def get_colab_path(default_path: str, env_var: str) -> str:
 class ExperimentConfig:
     """Configuration for systematic class imbalance experiments"""
     
-    # Dataset configuration
+    # dataset configuration
     dataset_version: str = 'v2'
     dataset_root: str = field(default_factory=lambda: get_colab_path('./data', 'COLAB_DATA_DIR'))
     target_keywords: List[str] = None
     
-    # Experimental grid
+    # experimental grid
     dataset_sizes: List[str] = None
     imbalance_ratios: List[float] = None
     augmentation_methods: List[str] = None
     
-    # Training configuration
+    # training configuration
     n_trials: int = 3
     n_epochs: int = 20
     batch_size: int = 32
     learning_rate: float = 0.001
     
-    # Audio configuration
+    # audio configuration
     sample_rate: int = 16000
     max_audio_length: int = 16000
     
+    # energy normalization
+    gsc_energy_profile_path: str = field(default_factory=lambda: os.path.join(
+        get_colab_path('./synthetic_datasets', 'COLAB_SYNTHETIC_DIR'),
+        'gsc_energy_profile.json'
+    ))    
+
+
     # TTS configuration
     tts_model_name: str = "gtts"
     
-    # Adversarial configuration
+    # adversarial configuration
     fgsm_epsilon: float = 0.01
     
-    # Output configuration
+    # output configuration
     save_dir: str = field(default_factory=lambda: get_colab_path('./results', 'COLAB_RESULTS_DIR'))
     save_intermediate: bool = True
     
     synthetic_dataset_path: str = field(default_factory=lambda: os.path.join(
         get_colab_path('./synthetic_datasets', 'COLAB_SYNTHETIC_DIR'),
-        'gsc_synthetic_comprehensive'  # CHANGED: Use comprehensive dataset by default
+        'gsc_synthetic_comprehensive'  # use comprehensive dataset by default
     )) 
     
+
     def __post_init__(self):
         """Set default values"""
         if self.target_keywords is None:

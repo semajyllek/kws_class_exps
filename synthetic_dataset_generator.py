@@ -18,9 +18,12 @@ import hashlib
 import math
 
 from audio_processing import AudioProcessor, AudioVariationGenerator
+from measure_gsc_energy import load_gsc_energy_profile
 
 logger = logging.getLogger(__name__)
 
+
+DEFAULT_TARGET_RMS = 0.1
 
 @dataclass
 class SyntheticDatasetConfig:
@@ -33,7 +36,8 @@ class SyntheticDatasetConfig:
     dataset_name: str = 'gsc_synthetic'
     save_audio_files: bool = True
     min_energy_threshold: float = 1e-6
-
+    target_rms: Optional[float] = None  # ADD THIS
+    energy_profile_path: str = './synthetic_datasets/gsc_energy_profile.json'  # ADD THIS
 
 def calculate_variation_counts(target_samples: int) -> Tuple[int, int]:
     """Calculate text and acoustic variations needed for target sample count."""
@@ -96,47 +100,68 @@ class SyntheticDatasetGenerator:
         self.config = config
         self.output_dir = Path(config.output_dir) / config.dataset_name
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
+    
         self.audio_processor = AudioProcessor(config.sample_rate, config.max_audio_length)
         self.variation_generator = AudioVariationGenerator(config.sample_rate)
-        
-        # Calculate actual variations needed
+    
+        # calculate actual variations needed
         self.text_variations, self.acoustic_variations = calculate_variation_counts(
             config.samples_per_keyword
         )
-        
-        self.metadata = {'config': config.__dict__, 'failed_samples': [], 'sample_metadata': []}
-        
-        logger.info(f"Generator initialized: {self.text_variations} text × "
-                   f"{self.acoustic_variations} acoustic = "
-                   f"{self.text_variations * self.acoustic_variations} samples/keyword")
     
+        # auto-load target RMS from GSC energy profile
+        if config.target_rms is None:
+            try:
+                energy_profile = load_gsc_energy_profile(config.energy_profile_path)
+                self.target_rms = energy_profile['recommended_target_rms']
+                logger.info(f"Auto-loaded target_rms={self.target_rms:.6f} from GSC profile")
+            except FileNotFoundError:
+                logger.warning("GSC energy profile not found. Using default target_rms=0.1")
+                logger.warning("Run 'python measure_gsc_energy.py' to generate profile")
+                self.target_rms = DEFAULT_TARGET_RMS
+        else:
+            self.target_rms = config.target_rms
+    
+        self.metadata = {'config': config.__dict__, 'failed_samples': [], 'sample_metadata': []}
+    
+        logger.info(f"Generator initialized: {self.text_variations} text × "
+               f"{self.acoustic_variations} acoustic = "
+               f"{self.text_variations * self.acoustic_variations} samples/keyword")
+        logger.info(f"Target RMS for normalization: {self.target_rms:.6f}") 
+
+
     def synthesize_text_variant(self, text: str, sample_id: str) -> Optional[torch.Tensor]:
         """Synthesize single text variant to audio."""
         temp_file = self.output_dir / f"temp_{sample_id}.wav"
-        
+    
         try:
             synthesize_to_file(text, str(temp_file))
-            
+        
             if not temp_file.exists():
                 raise RuntimeError(f"gTTS did not generate file for: {text}")
-            
+        
             waveform, sr = torchaudio.load(temp_file)
             processed = self.audio_processor.preprocess_audio(waveform, sr)
-            
+        
+            # normalize to target RMS energy (auto-loaded from GSC profile)
+            processed = self.audio_processor.normalize_to_target_rms(
+                processed, target_rms=self.target_rms
+            )
+        
             if validate_audio_quality(processed, self.config.min_energy_threshold):
                 return processed
             else:
                 logger.warning(f"Quality check failed: {text}")
                 return None
-                
+            
         except Exception as e:
             logger.error(f"Failed to synthesize '{text}': {e}")
             return None
         finally:
             if temp_file.exists():
                 temp_file.unlink()
-    
+ 
+ 
     def create_acoustic_variations(self, base_audio: torch.Tensor, 
                                   n_variations: int, sample_id: str) -> List[torch.Tensor]:
         """Generate acoustic variations from base sample."""

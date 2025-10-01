@@ -1,85 +1,47 @@
-GOOGLE COLAB NOTEBOOK CELLS FOR CLASS IMBALANCE EXPERIMENTS
-===============================================================
-
-CELL 1: Setup & Clone Repository
----------------------------------
-# Mount Google Drive
-from google.colab import drive
-drive.mount('/content/drive')
-
+CELL 4: Measure GSC Energy Profile (Run Once - 5-10 min)
+---------------------------------------------------------
+from measure_gsc_energy import measure_gsc_energy, load_gsc_energy_profile
+from pathlib import Path
 import os
-import sys
 
-# Set up project directory in Drive
-project_dir = '/content/drive/MyDrive/kws_class_experiments'
-os.makedirs(project_dir, exist_ok=True)
-os.chdir(project_dir)
+# Ensure synthetic directory exists
+if 'COLAB_SYNTHETIC_DIR' not in os.environ:
+    project_dir = '/content/drive/MyDrive/kws_class_experiments'
+    os.environ['COLAB_SYNTHETIC_DIR'] = f"{project_dir}/synthetic_datasets"
+    os.makedirs(os.environ['COLAB_SYNTHETIC_DIR'], exist_ok=True)
 
-# Clone your repository (replace with your actual repo URL)
-repo_url = "https://github.com/yourusername/kws_class_exps.git"
+profile_path = f"{os.environ['COLAB_SYNTHETIC_DIR']}/gsc_energy_profile.json"
 
-if not os.path.exists('kws_class_exps'):
-    !git clone {repo_url}
-    print("Repository cloned")
+# Check if profile already exists
+if Path(profile_path).exists():
+    print("✓ GSC energy profile already exists!")
+    profile = load_gsc_energy_profile(profile_path)
+    print(f"\n  Target RMS: {profile['recommended_target_rms']:.6f}")
+    print(f"  Mean Energy: {profile['energy']['mean']:.2f}")
+    print(f"  Based on {profile['n_samples_measured']} GSC samples")
+    print("\n✓ Synthetic audio will be normalized to match this profile")
+    print("Skip to Cell 5.")
 else:
-    print("Repository already exists")
-
-# Change to code directory and add to Python path
-os.chdir('kws_class_exps')
-sys.path.append(os.getcwd())
-
-print(f"Working directory: {os.getcwd()}")
-
-
-CELL 2: Install Dependencies
------------------------------
-# Install PyTorch for current Colab CUDA
-!pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
-
-# Install other dependencies
-!pip install gtts scikit-learn pandas matplotlib seaborn librosa scipy tqdm
-
-# Install system dependencies
-!apt-get update -qq
-!apt-get install -y ffmpeg
-
-# Verify installations
-import torch
-import gtts
-print(f"PyTorch: {torch.__version__}")
-print(f"CUDA available: {torch.cuda.is_available()}")
-if torch.cuda.is_available():
-    print(f"GPU: {torch.cuda.get_device_name(0)}")
-print(f"gTTS: {gtts.__version__}")
+    print("Measuring GSC energy profile...")
+    print("This analyzes 5,000 GSC samples to measure typical audio energy")
+    print("Takes 5-10 minutes but only needs to be done once\n")
+    
+    # Measure and save profile
+    profile = measure_gsc_energy(
+        output_file=profile_path,
+        dataset_size='medium'  # Sample 5K GSC samples
+    )
+    
+    print("\n" + "="*60)
+    print("✓ Energy profile saved!")
+    print("="*60)
+    print("\nThis profile will be automatically used to ensure synthetic")
+    print("audio has the same energy distribution as real GSC samples.")
+    print("\nThis prevents the model from learning energy shortcuts instead")
+    print("of actual speech patterns - critical for valid experiments!")
 
 
-CELL 3: Configure Paths for Google Drive
------------------------------------------
-import os
-
-# Define project directory
-project_dir = '/content/drive/MyDrive/kws_class_experiments'
-
-# Set environment variables for Google Drive paths
-os.environ['COLAB_DATA_DIR'] = f"{project_dir}/data"
-os.environ['COLAB_SYNTHETIC_DIR'] = f"{project_dir}/synthetic_datasets"
-os.environ['COLAB_RESULTS_DIR'] = f"{project_dir}/results"
-
-# Create all directories
-directories = [
-    os.environ['COLAB_DATA_DIR'],
-    os.environ['COLAB_SYNTHETIC_DIR'], 
-    os.environ['COLAB_RESULTS_DIR']
-]
-
-for directory in directories:
-    os.makedirs(directory, exist_ok=True)
-    print(f"Created: {directory}")
-
-print("Google Drive paths configured")
-
-
-CELL 4: Check if Comprehensive Dataset Exists
+CELL 5: Check if Comprehensive Dataset Exists
 ----------------------------------------------
 from synthetic_data_generator import check_dataset_exists
 import os
@@ -91,228 +53,6 @@ if result['exists']:
     print("✓ Comprehensive synthetic dataset already exists!")
     print(f"Total samples: {result['info']['total_samples']}")
     print(f"Samples per keyword: {result['info']['samples_per_keyword']}")
-    print("\nSkip Cell 5 and go directly to Cell 6.")
+    print("\nSkip Cell 6 and go directly to Cell 7.")
 else:
-    print("✗ Dataset not found. Run Cell 5 to generate it.")
-
-
-CELL 5: Generate Comprehensive Dataset (Run Once - 45-60 min)
---------------------------------------------------------------
-from synthetic_data_generator import generate_comprehensive_dataset
-import os
-
-# Ensure environment variable is set
-if 'COLAB_SYNTHETIC_DIR' not in os.environ:
-    project_dir = '/content/drive/MyDrive/kws_class_experiments'
-    os.environ['COLAB_SYNTHETIC_DIR'] = f"{project_dir}/synthetic_datasets"
-    os.makedirs(os.environ['COLAB_SYNTHETIC_DIR'], exist_ok=True)
-
-# Generate comprehensive dataset
-print("Generating comprehensive synthetic dataset...")
-print("Target: 500 samples per keyword × 4 keywords = 2000 total samples")
-print("This will take 45-60 minutes but only needs to be done once\n")
-
-dataset_path = generate_comprehensive_dataset(
-    keywords=['yes', 'no', 'up', 'down'],
-    samples_per_keyword=500,
-    output_dir=os.environ['COLAB_SYNTHETIC_DIR'],
-    dataset_name='gsc_synthetic_comprehensive'
-)
-
-print(f"\n✓ Dataset created at: {dataset_path}")
-print("This dataset can be reused for all future experiments")
-
-
-CELL 6: Inspect Dataset Quality
---------------------------------
-from synthetic_data_generator import SyntheticDatasetLoader
-import os
-
-dataset_path = f"{os.environ['COLAB_SYNTHETIC_DIR']}/gsc_synthetic_comprehensive"
-
-# Load and inspect dataset
-loader = SyntheticDatasetLoader(dataset_path)
-stats = loader.get_statistics()
-
-print("SYNTHETIC DATASET STATISTICS")
-print("="*50)
-print(f"Total samples: {stats['total_samples']}")
-print(f"Samples per keyword: {stats['samples_per_keyword']}")
-print(f"Unique text variants: {stats['unique_text_variants']}")
-print(f"Base samples: {stats['base_samples']}")
-print(f"\nAudio Quality:")
-print(f"  Mean energy: {stats['audio_quality']['mean_energy']:.4f}")
-print(f"  Mean max amplitude: {stats['audio_quality']['mean_max_amplitude']:.4f}")
-
-# Show sample metadata
-print("\n\nMETADATA SAMPLE")
-print("="*50)
-print(loader.metadata_df.head(10))
-
-
-CELL 7: Listen to Audio Samples (Optional)
--------------------------------------------
-from synthetic_data_generator import SyntheticDatasetLoader
-from IPython.display import Audio, display
-import os
-
-dataset_path = f"{os.environ['COLAB_SYNTHETIC_DIR']}/gsc_synthetic_comprehensive"
-loader = SyntheticDatasetLoader(dataset_path)
-
-print("AUDIO SAMPLES (Click to play)")
-print("="*50)
-
-keywords = ['yes', 'no', 'up', 'down']
-samples_per_keyword = 3
-
-for keyword in keywords:
-    print(f"\n--- Keyword: '{keyword}' ---")
-    
-    keyword_meta = loader.metadata_df[loader.metadata_df['keyword'] == keyword]
-    
-    if len(keyword_meta) == 0:
-        print(f"  No samples found for '{keyword}'")
-        continue
-    
-    sample_indices = keyword_meta.sample(
-        min(samples_per_keyword, len(keyword_meta))
-    ).index.tolist()
-    
-    for i, idx in enumerate(sample_indices):
-        row = loader.metadata_df.loc[idx]
-        audio_sample = loader.audio_tensor[idx]
-        
-        print(f"\nSample {i+1}:")
-        print(f"  Text: '{row['text_variant']}'")
-        print(f"  Is base: {row['is_base_sample']}")
-        print(f"  Energy: {row['audio_energy']:.4f}")
-        
-        audio_np = audio_sample.squeeze().numpy()
-        display(Audio(audio_np, rate=16000))
-
-
-CELL 8: Run Experiments with Comprehensive Dataset
----------------------------------------------------
-import os
-
-# Ensure paths are set
-if 'COLAB_RESULTS_DIR' not in os.environ:
-    project_dir = '/content/drive/MyDrive/kws_class_experiments'
-    os.environ['COLAB_DATA_DIR'] = f"{project_dir}/data"
-    os.environ['COLAB_SYNTHETIC_DIR'] = f"{project_dir}/synthetic_datasets"
-    os.environ['COLAB_RESULTS_DIR'] = f"{project_dir}/results"
-
-print("Running experiments with comprehensive synthetic dataset...")
-print("This will take 30-90 minutes depending on configuration")
-
-# Run experiments using your main script
-!python main.py --config quick
-
-# Check if experiments completed
-results_file = f"{os.environ['COLAB_RESULTS_DIR']}/experiment_results.csv"
-if os.path.exists(results_file):
-    import pandas as pd
-    df = pd.read_csv(results_file)
-    print(f"\nExperiments completed!")
-    print(f"Total experiments: {len(df)}")
-    print(f"Methods tested: {sorted(df['augmentation_method'].unique())}")
-    print(f"Average F1 (keyword): {df['f1_keyword'].mean():.3f}")
-else:
-    print("\nExperiments did not complete successfully")
-
-
-CELL 9: Display Results
------------------------
-from IPython.display import Image, display
-import glob
-import os
-
-print("EXPERIMENTAL RESULTS")
-print("="*60)
-
-results_dir = os.environ['COLAB_RESULTS_DIR']
-analysis_dir = f"{results_dir}/analysis"
-
-if os.path.exists(analysis_dir):
-    # Display all plots
-    plot_files = [
-        ("performance_heatmap.png", "Performance Heatmap"),
-        ("improvement_analysis.png", "Improvement Analysis"),
-        ("method_comparison.png", "Method Comparison"),
-        ("statistical_significance.png", "Statistical Significance")
-    ]
-    
-    for plot_file, title in plot_files:
-        plot_path = f"{analysis_dir}/{plot_file}"
-        if os.path.exists(plot_path):
-            print(f"\n{title}")
-            print("-" * len(title))
-            display(Image(plot_path, width=700))
-    
-    # Display summary report
-    summary_file = f"{analysis_dir}/summary_report.txt"
-    if os.path.exists(summary_file):
-        print("\nDETAILED SUMMARY REPORT")
-        print("="*60)
-        with open(summary_file, 'r') as f:
-            print(f.read())
-    
-    # Show file locations
-    print(f"\nRESULTS LOCATION")
-    print("="*60)
-    print(f"All results: {results_dir}")
-    print(f"Plots: {analysis_dir}")
-    print(f"Raw data: {results_dir}/experiment_results.csv")
-    print(f"Synthetic dataset: {os.environ['COLAB_SYNTHETIC_DIR']}/gsc_synthetic_comprehensive")
-    
-else:
-    print("No analysis results found")
-    print(f"Expected location: {analysis_dir}")
-
-print("\nANALYSIS COMPLETE!")
-print("All results are saved to your Google Drive.")
-
-
-===============================================================
-EXECUTION NOTES
-===============================================================
-
-Cell Execution Order:
----------------------
-1. Cells 1-3: Must run every Colab session (setup)
-2. Cell 4: Check if dataset exists
-3. Cell 5: Run ONCE to generate dataset (skip if already exists)
-4. Cells 6-7: Optional inspection (can run anytime)
-5. Cell 8: Run experiments (can run multiple times with different configs)
-6. Cell 9: Display results
-
-Time Estimates:
----------------
-- Setup (Cells 1-3): 5 minutes
-- Dataset generation (Cell 5): 45-60 minutes (one-time, generates ~500 samples/keyword)
-- Experiments (Cell 8): 30-90 minutes
-- Total first run: 1.5-2.5 hours
-- Subsequent runs: 30-90 minutes (skip dataset generation)
-
-Important Variables:
---------------------
-- project_dir: /content/drive/MyDrive/kws_class_experiments
-- repo_url: Replace with your GitHub repository URL
-- Dataset name: gsc_synthetic_comprehensive (~500 samples/keyword = ~2000 total)
-
-Troubleshooting:
-----------------
-- If KeyError for environment variables: Run Cell 3 first
-- If experiments fail with "0 positive samples": Use full dataset
-- If TTS fails: gTTS should work in Colab by default
-- If download stalls: Restart cell, it will resume
-- If Cell 5 shows only 15 samples/keyword: You're using old code, update synthetic_data_generator.py
-
-Key Changes from Original:
----------------------------
-- Cell 4: Better visual feedback with checkmarks
-- Cell 5: Accurate time estimate (45-60 min for 500 samples/keyword)
-- Cell 6: Direct use of SyntheticDatasetLoader (no dataset_inspection.py needed)
-- Cell 7: Inline audio playback (no dataset_inspection.py needed)
-- All cells now work with refactored synthetic_data_generator.py
-- Removed dependency on dataset_inspection.py (can be deleted)
+    print("✗ Dataset not found. Run Cell 6 to generate it.")
