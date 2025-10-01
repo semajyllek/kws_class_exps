@@ -1,0 +1,384 @@
+# Google Colab Notebook Cells for KWS Class Imbalance Experiments
+
+## PART 1: Setup & Data Generation (Run Once)
+
+### CELL 1: Mount Google Drive & Setup
+```python
+from google.colab import drive
+drive.mount('/content/drive')
+
+# =============================================================================
+# CONFIGURE YOUR REPOSITORY URL HERE
+# =============================================================================
+REPO_URL = "https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git"  # ← CHANGE THIS
+# =============================================================================
+
+# Setup project directory
+project_dir = '/content/drive/MyDrive/kws_class_experiments'
+
+# Check if repo exists, delete and reclone
+import os
+
+# Change to a safe directory first
+%cd /content
+
+if os.path.exists(project_dir):
+    print(f"Removing existing repository at {project_dir}")
+    !rm -rf {project_dir}
+
+# Clone fresh
+!git clone {REPO_URL} {project_dir}
+
+# Now change into the cloned directory
+%cd {project_dir}
+
+# Set environment variables for configs
+os.environ['COLAB_DATA_DIR'] = f"{project_dir}/data"
+os.environ['COLAB_SYNTHETIC_DIR'] = f"{project_dir}/synthetic_datasets"
+os.environ['COLAB_RESULTS_DIR'] = f"{project_dir}/results"
+
+print("✓ Project directory:", project_dir)
+print("✓ Repository cloned fresh from:", REPO_URL)
+print("✓ Environment configured")
+```
+
+### CELL 2: Install Dependencies
+```python
+# Install requirements
+!pip install -q torch torchaudio gtts scikit-learn pandas numpy matplotlib seaborn scipy librosa tqdm
+
+# Optional: Install Bark for high-quality TTS (takes 2-5 min, downloads ~2GB)
+# Uncomment the next line if you want to use Bark instead of gTTS
+# !pip install -q git+https://github.com/suno-ai/bark.git
+
+print("✓ Dependencies installed")
+```
+
+### CELL 3: Configure Synthetic Data Generation
+```python
+from synthetic_data_generator import SyntheticDatasetConfig
+
+# =============================================================================
+# CONFIGURE YOUR SYNTHETIC DATA GENERATION HERE
+# =============================================================================
+
+synthetic_config = SyntheticDatasetConfig(
+    keywords=['yes', 'no', 'up', 'down'],
+    samples_per_keyword=500,  # Reduce to 100 for Bark (much slower)
+    tts_engine='gtts',  # Change to 'bark' for higher quality
+    measure_energy=True  # Set to True to measure GSC energy profile (once, takes 5-10 min)
+)
+
+print("Synthetic Data Generation Config:")
+print(f"  Keywords: {synthetic_config.keywords}")
+print(f"  Samples per keyword: {synthetic_config.samples_per_keyword}")
+print(f"  TTS Engine: {synthetic_config.tts_engine}")
+print(f"  Measure GSC Energy: {synthetic_config.measure_energy}")
+print(f"  Output: {synthetic_config.output_dir}/{synthetic_config.dataset_name}")
+
+if synthetic_config.tts_engine == 'bark':
+    print(f"\n⚠️  Bark is SLOW: ~{synthetic_config.samples_per_keyword * len(synthetic_config.keywords) * 15 / 3600:.1f} hours estimated")
+else:
+    print(f"\n✓ gTTS is fast: ~{synthetic_config.samples_per_keyword * len(synthetic_config.keywords) * 3 / 60:.1f} minutes estimated")
+
+if synthetic_config.measure_energy:
+    print("\n📊 Energy measurement enabled (adds 5-10 min on first run)")
+```
+
+### CELL 4: Check if Synthetic Dataset Already Exists
+```python
+from synthetic_data_loader import check_dataset_exists
+
+dataset_path = f"{synthetic_config.output_dir}/{synthetic_config.dataset_name}"
+result = check_dataset_exists(dataset_path)
+
+if result['exists']:
+    print("✓ Synthetic dataset already exists!")
+    print(f"  Dataset: {dataset_path}")
+    print(f"  Total samples: {result['info']['total_samples']}")
+    print(f"  TTS Engine: {result['info'].get('tts_engine', 'unknown')}")
+    print(f"  Samples per keyword: {result['info']['samples_per_keyword']}")
+    print("\n✓ Skip to CELL 6 (experiments)")
+else:
+    print("✗ Dataset not found. Run CELL 5 to generate it.")
+```
+
+### CELL 5: Generate Synthetic Dataset (Skip if already exists)
+```python
+from synthetic_data_generator import generate_from_config
+from synthetic_data_loader import check_dataset_exists
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
+print("="*60)
+print(f"🎤 Generating synthetic dataset with {synthetic_config.tts_engine.upper()}")
+print("="*60)
+
+# Generate dataset using config
+# This will automatically measure GSC energy if measure_energy=True and profile doesn't exist
+dataset_path = generate_from_config(synthetic_config)
+
+print("\n" + "="*60)
+print("✓ Synthetic dataset generation complete!")
+print(f"  Saved to: {dataset_path}")
+print("="*60)
+
+# Verify dataset
+result = check_dataset_exists(dataset_path)
+if result['exists']:
+    print(f"\n✓ Verification passed")
+    print(f"  Total samples: {result['info']['total_samples']}")
+    print(f"  Samples per keyword: {result['info']['samples_per_keyword']}")
+```
+
+---
+
+## PART 2: Run Experiments
+
+### CELL 6: Configure Experiments
+```python
+from config import ExperimentConfig
+import os
+
+# =============================================================================
+# CONFIGURE YOUR EXPERIMENTS HERE
+# =============================================================================
+
+# Option 1: Quick test (2-3 hours)
+experiment_config = ExperimentConfig(
+    # Dataset configuration
+    dataset_version='v2',
+    target_keywords=['yes', 'no', 'up', 'down'],
+    
+    # Experimental grid (quick test)
+    dataset_sizes=['small'],  # or ['small', 'medium', 'large']
+    imbalance_ratios=[0.1, 0.5, 1.0],  # or [0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0]
+    augmentation_methods=['none', 'tts', 'adversarial'],  # or add 'combined'
+    
+    # Training parameters
+    n_trials=2,  # Increase to 5 for final results
+    n_epochs=10,  # Increase to 20-25 for final results
+    batch_size=32,
+    learning_rate=0.001,
+    
+    # Paths (auto-configured for Colab)
+    dataset_root=os.environ.get('COLAB_DATA_DIR', './data'),
+    save_dir=os.environ.get('COLAB_RESULTS_DIR', './results'),
+    synthetic_dataset_path=dataset_path,  # Use the dataset we just generated
+    
+    # Save intermediate results
+    save_intermediate=True
+)
+
+# Print configuration summary
+print("Experiment Configuration:")
+print("="*60)
+print(f"Dataset sizes: {experiment_config.dataset_sizes}")
+print(f"Imbalance ratios: {experiment_config.imbalance_ratios}")
+print(f"Augmentation methods: {experiment_config.augmentation_methods}")
+print(f"Trials per condition: {experiment_config.n_trials}")
+print(f"Epochs per trial: {experiment_config.n_epochs}")
+print(f"\nSynthetic dataset: {experiment_config.synthetic_dataset_path}")
+
+# Calculate total experiments
+total_experiments = (len(experiment_config.dataset_sizes) * 
+                    len(experiment_config.imbalance_ratios) * 
+                    len(experiment_config.augmentation_methods) * 
+                    experiment_config.n_trials)
+
+print(f"\n📊 Total experiments: {total_experiments}")
+print(f"⏱️  Estimated time: ~{total_experiments * 0.1:.1f} hours")
+print("="*60)
+```
+
+### CELL 7: Run Experiments
+```python
+# Ensure data directory exists before downloading GSC dataset
+import os
+os.makedirs(os.environ['COLAB_DATA_DIR'], exist_ok=True)
+
+from experiment_runner import ExperimentRunner
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
+print("🚀 Starting experimental evaluation...")
+print("="*60)
+
+# Create and run experiment runner
+runner = ExperimentRunner(experiment_config)
+runner.run_experimental_grid()
+
+print("\n" + "="*60)
+print("✓ Experiments complete!")
+print(f"  Results saved to: {runner.save_dir}")
+print("="*60)
+```
+
+### CELL 8: Analyze Results
+```python
+from results_analysis import ExperimentAnalyzer
+from pathlib import Path
+
+results_file = Path(runner.save_dir) / 'experiment_results.csv'
+
+if results_file.exists():
+    print("📊 Analyzing experimental results...\n")
+    
+    # Create analyzer
+    analyzer = ExperimentAnalyzer(str(results_file))
+    
+    # Generate all analyses
+    analysis_dir = analyzer.save_all_analyses(runner.save_dir / 'analysis')
+    
+    print(f"✓ Analysis complete: {analysis_dir}\n")
+    
+    # Print summary
+    summary = analyzer.generate_publication_summary()
+    print("="*60)
+    print("KEY EXPERIMENTAL FINDINGS")
+    print("="*60)
+    print(summary)
+    print("="*60)
+else:
+    print("❌ No results file found. Run experiments first.")
+```
+
+### CELL 9: Display Visualizations
+```python
+from IPython.display import Image, display
+from pathlib import Path
+
+analysis_dir = Path(runner.save_dir) / 'analysis'
+
+if analysis_dir.exists():
+    print("📈 Generated Visualizations:\n")
+    
+    # List of plots to display
+    plots = [
+        'performance_heatmap.png',
+        'improvement_analysis.png',
+        'method_comparison.png',
+        'statistical_significance.png'
+    ]
+    
+    for plot_name in plots:
+        plot_path = analysis_dir / plot_name
+        if plot_path.exists():
+            print(f"\n{plot_name}:")
+            print("-" * 60)
+            display(Image(filename=str(plot_path)))
+        else:
+            print(f"⚠️  {plot_name} not found")
+else:
+    print("❌ No analysis directory found. Run analysis first.")
+```
+
+---
+
+## OPTIONAL: Advanced Configurations
+
+### Generate Multiple TTS Datasets for Comparison
+```python
+from synthetic_data_generator import SyntheticDatasetConfig, generate_from_config
+
+# Generate gTTS dataset
+gtts_config = SyntheticDatasetConfig(
+    keywords=['yes', 'no', 'up', 'down'],
+    samples_per_keyword=500,
+    tts_engine='gtts',
+    measure_energy=True
+)
+
+gtts_path = generate_from_config(gtts_config)
+
+# Generate Bark dataset (slower but higher quality)
+bark_config = SyntheticDatasetConfig(
+    keywords=['yes', 'no', 'up', 'down'],
+    samples_per_keyword=100,  # Fewer samples due to speed
+    tts_engine='bark',
+    measure_energy=False  # Reuse energy profile from above
+)
+
+bark_path = generate_from_config(bark_config)
+
+print(f"✓ Generated gTTS dataset: {gtts_path}")
+print(f"✓ Generated Bark dataset: {bark_path}")
+```
+
+### Run Experiments with Different TTS Engines
+```python
+import os
+from config import ExperimentConfig
+from experiment_runner import ExperimentRunner
+
+# Experiment 1: gTTS augmentation
+exp_gtts = ExperimentConfig(
+    dataset_sizes=['small'],
+    imbalance_ratios=[0.1, 0.5],
+    augmentation_methods=['none', 'tts'],
+    n_trials=2,
+    synthetic_dataset_path=f"{os.environ['COLAB_SYNTHETIC_DIR']}/gsc_synthetic_gtts",
+    save_dir=f"{os.environ['COLAB_RESULTS_DIR']}/results_gtts"
+)
+
+runner_gtts = ExperimentRunner(exp_gtts)
+runner_gtts.run_experimental_grid()
+
+# Experiment 2: Bark augmentation
+exp_bark = ExperimentConfig(
+    dataset_sizes=['small'],
+    imbalance_ratios=[0.1, 0.5],
+    augmentation_methods=['none', 'tts'],
+    n_trials=2,
+    synthetic_dataset_path=f"{os.environ['COLAB_SYNTHETIC_DIR']}/gsc_synthetic_bark",
+    save_dir=f"{os.environ['COLAB_RESULTS_DIR']}/results_bark"
+)
+
+runner_bark = ExperimentRunner(exp_bark)
+runner_bark.run_experimental_grid()
+
+print("✓ Comparison experiments complete!")
+print(f"  gTTS results: {runner_gtts.save_dir}")
+print(f"  Bark results: {runner_bark.save_dir}")
+```
+
+---
+
+## Workflow Summary
+
+**First Time Setup:**
+1. Run CELLs 1-5 to generate synthetic dataset (once)
+2. Run CELLs 6-9 to run experiments and analyze
+
+**Subsequent Runs:**
+1. Run CELL 1 (mount drive & clone repo)
+2. Run CELL 2 (install dependencies)
+3. Modify CELL 6 (experiment config)
+4. Run CELLs 6-9 (experiments and analysis)
+
+**To Compare TTS Engines:**
+1. Generate both datasets (CELL 5 with different configs)
+2. Run experiments with each (see Optional section)
+3. Compare results side-by-side
+
+**Key Config Options:**
+
+*Synthetic Data (CELL 3):*
+- `tts_engine`: `'gtts'` (fast) or `'bark'` (slow, high-quality)
+- `samples_per_keyword`: 500 for gTTS, 100 for Bark
+- `measure_energy`: `True` on first run, `False` after
+
+*Experiments (CELL 6):*
+- `dataset_sizes`: `['small']` for testing, `['small', 'medium', 'large']` for full study
+- `imbalance_ratios`: `[0.1, 0.5, 1.0]` for quick test
+- `augmentation_methods`: `['none', 'tts', 'adversarial']` or add `'combined'`
+- `n_trials`: 2 for testing, 5 for publication
+- `n_epochs`: 10 for testing, 20-25 for final results
+
+**Troubleshooting:**
+- If you update code files, restart runtime before running cells
+- If directories don't exist, they're created automatically
+- Results persist in Google Drive between sessions
+- Check `experiment_main.log` for detailed progress
