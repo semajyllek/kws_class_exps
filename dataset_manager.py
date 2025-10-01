@@ -29,16 +29,45 @@ class GSCDatasetManager:
             'large': 10000,
             'full': None
         }
-        
+    
+    def _check_dataset_exists(self) -> bool:
+        """Check if dataset is already downloaded and extracted"""
+        # Check for the extracted dataset directory structure
+        dataset_dir = self.root_dir / 'SpeechCommands' / 'speech_commands_v0.02'
+        return dataset_dir.exists() and len(list(dataset_dir.glob('*'))) > 0
+    
     def load_raw_dataset(self, subset: str = "training") -> torchaudio.datasets.SPEECHCOMMANDS:
         """Load raw Google Speech Commands dataset"""
         logger.info(f"Loading GSC {self.version} dataset from {self.root_dir}")
         
-        return torchaudio.datasets.SPEECHCOMMANDS(
+        # Check if dataset needs to be downloaded/extracted
+        dataset_exists = self._check_dataset_exists()
+        
+        if not dataset_exists:
+            print("\n" + "="*60)
+            print("📦 FIRST-TIME SETUP: Google Speech Commands Dataset")
+            print("="*60)
+            print("This will download and extract ~2.3GB (one-time only)")
+            print("\nSteps:")
+            print("  1. ⬇️  Download (shows progress bar)")
+            print("  2. 📂 Extract archive (5-10 min, no progress)")
+            print("  3. 🔄 Load samples (shows progress bar)")
+            print("\n⏳ Starting download...")
+            print("="*60 + "\n")
+        
+        dataset = torchaudio.datasets.SPEECHCOMMANDS(
             root=str(self.root_dir),
             download=True,
             subset=subset if self.version == 'v2' else None
         )
+        
+        if not dataset_exists:
+            print("\n" + "="*60)
+            print("✅ Dataset ready! Moving to sample loading...")
+            print("="*60 + "\n")
+        
+        return dataset
+
     
     def extract_audio_labels(self, dataset, max_samples: int = None) -> Tuple[List[torch.Tensor], List[str]]:
         """Extract and preprocess audio samples with labels"""

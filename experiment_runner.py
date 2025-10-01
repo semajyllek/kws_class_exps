@@ -24,6 +24,10 @@ class ExperimentRunner:
         self.save_dir = Path(config.save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
         
+        # ensure dataset root directory exists
+        Path(config.dataset_root).mkdir(parents=True, exist_ok=True)        
+
+  
         # Initialize components
         self.dataset_manager = GSCDatasetManager(
             root_dir=config.dataset_root,
