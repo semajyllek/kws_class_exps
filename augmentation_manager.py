@@ -7,7 +7,7 @@ from typing import List, Tuple, Dict, Optional
 import logging
 import numpy as np
 
-from tts_augmenter import TTSAugmenter
+from synthetic_data_generator import SyntheticDatasetLoader
 from adversarial_augmenter import AdversarialAugmenter
 
 logger = logging.getLogger(__name__)
@@ -35,11 +35,19 @@ class AugmentationManager:
         self.fgsm_epsilon = fgsm_epsilon
         
         # Initialize augmentation methods
-        self.tts_augmenter = TTSAugmenter(synthetic_dataset_path)
+        self.synthetic_loader = None
+        if synthetic_dataset_path:
+            try:
+                self.synthetic_loader = SyntheticDatasetLoader(synthetic_dataset_path)
+                logger.info(f"Loaded synthetic dataset: {self.synthetic_loader.info['total_samples']} samples")
+            except Exception as e:
+                logger.error(f"Failed to load synthetic dataset: {e}")
+                raise
+        
         self.adversarial_augmenter = AdversarialAugmenter(fgsm_epsilon)
         
         logger.info("AugmentationManager initialized")
-        logger.info(f"  - TTS augmenter: {'ready' if self.tts_augmenter.is_ready() else 'not loaded'}")
+        logger.info(f"  - Synthetic dataset: {'ready' if self.synthetic_loader else 'not loaded'}")
         logger.info(f"  - Adversarial augmenter: epsilon={fgsm_epsilon}")
     
     def set_adversarial_model(self, model: nn.Module):
@@ -76,6 +84,134 @@ class AugmentationManager:
         
         current_ratio = n_positive / n_negative if n_negative > 0 else float('inf')
         
+        return {
+            'current_positive': n_positive,
+            'current_negative': n_negative,
+            'target_positive': target_positive,
+            'samples_needed': samples_needed,
+            'current_ratio': current_ratio
+        }
+    
+    def apply_tts_augmentation(self, keywords: List[str], n_samples: int,
+                             random_state: Optional[int] = None
+                             ) -> Tuple[List[torch.Tensor], List[str]]:
+        """
+        Apply TTS (synthetic) augmentation.
+        
+        Args:
+            keywords: List of target keywords
+            n_samples: Number of samples to generate
+            random_state: Random seed for reproducibility
+        
+        Returns:
+            Tuple of (audio_samples, labels)
+        """
+        if n_samples <= 0:
+            return [], []
+        
+        if not self.synthetic_loader:
+            raise RuntimeError(
+                "No synthetic dataset loaded. "
+                "Generate one using: python synthetic_data_generator.py"
+            )
+        
+        logger.info(f"Applying TTS augmentation: {n_samples} samples")
+        
+        # Distribute samples evenly across keywords
+        samples_per_keyword = max(1, n_samples // len(keywords))
+        
+        return self.synthetic_loader.get_balanced_samples(
+            keywords,
+            samples_per_keyword,
+            random_state
+        )
+    
+    def apply_adversarial_augmentation(self, audio_files: List[torch.Tensor],
+                                     labels: List[str], n_samples: int
+                                     ) -> Tuple[List[torch.Tensor], List[str]]:
+        """
+        Apply adversarial (FGSM) augmentation.
+        
+        Args:
+            audio_files: Original audio samples
+            labels: Original labels
+            n_samples: Number of adversarial samples to generate
+        
+        Returns:
+            Tuple of (audio_samples, labels)
+        """
+        if n_samples <= 0:
+            return [], []
+        
+        if not self.adversarial_augmenter.is_ready():
+            raise RuntimeError(
+                "Adversarial augmenter not ready. No target model set. "
+                "Call set_adversarial_model() first."
+            )
+        
+        logger.info(f"Applying adversarial augmentation: {n_samples} samples")
+        
+        return self.adversarial_augmenter.generate_adversarial_samples(
+            audio_files,
+            labels,
+            n_samples
+        )
+    
+    def apply_combined_augmentation(self, audio_files: List[torch.Tensor],
+                                  labels: List[str], keywords: List[str],
+                                  n_samples: int,
+                                  random_state: Optional[int] = None,
+                                  tts_ratio: float = 0.5
+                                  ) -> Tuple[List[torch.Tensor], List[str]]:
+        """
+        Apply combined TTS + adversarial augmentation.
+        
+        Args:
+            audio_files: Original audio samples
+            labels: Original labels
+            keywords: List of target keywords
+            n_samples: Total number of samples to generate
+            random_state: Random seed for reproducibility
+            tts_ratio: Proportion of samples to generate with TTS (default 0.5)
+        
+        Returns:
+            Tuple of (audio_samples, labels)
+        """
+        if n_samples <= 0:
+            return [], []
+        
+        # Split samples between methods
+        n_tts = int(n_samples * tts_ratio)
+        n_adversarial = n_samples - n_tts
+        
+        logger.info(
+            f"Applying combined augmentation: {n_tts} TTS + "
+            f"{n_adversarial} adversarial = {n_samples} total"
+        )
+        
+        # Generate TTS samples
+        tts_audio, tts_labels = self.apply_tts_augmentation(
+            keywords,
+            n_tts,
+            random_state
+        )
+        
+        # Generate adversarial samples
+        adv_audio, adv_labels = self.apply_adversarial_augmentation(
+            audio_files,
+            labels,
+            n_adversarial
+        )
+        
+        # Combine samples
+        combined_audio = tts_audio + adv_audio
+        combined_labels = tts_labels + adv_labels
+        
+        logger.info(
+            f"Combined augmentation generated {len(combined_audio)} samples "
+            f"({len(tts_audio)} TTS + {len(adv_audio)} adversarial)"
+        )
+        
         return combined_audio, combined_labels
     
     def apply_augmentation(self, audio_files: List[torch.Tensor],
@@ -89,7 +225,7 @@ class AugmentationManager:
         Args:
             audio_files: Original audio samples
             labels: Original labels
-            method: Augmentation method ('none', 'synthetic', 'adversarial', 'combined')
+            method: Augmentation method ('none', 'synthetic', 'tts', 'adversarial', 'combined')
             keywords: List of target keywords
             target_ratio: Current imbalance ratio
             random_state: Random seed for reproducibility
@@ -119,7 +255,7 @@ class AugmentationManager:
             logger.info("Method 'none': skipping augmentation")
             return audio_files, labels
         
-        elif method == 'synthetic':
+        elif method in ['synthetic', 'tts']:  # Accept both names
             aug_audio, aug_labels = self.apply_tts_augmentation(
                 keywords,
                 samples_needed,
@@ -217,150 +353,24 @@ class AugmentationManager:
             Dictionary with augmentation statistics
         """
         stats = {
-            'tts_augmenter': {
-                'ready': self.tts_augmenter.is_ready(),
-                'available_keywords': None,
+            'synthetic_augmentation': {
+                'ready': self.synthetic_loader is not None,
+                'total_samples': None,
                 'samples_per_keyword': None
             },
-            'adversarial_augmenter': {
+            'adversarial_augmentation': {
                 'ready': self.adversarial_augmenter.is_ready(),
                 'epsilon': self.fgsm_epsilon
             }
         }
         
-        # Add TTS statistics if available
-        if self.tts_augmenter.is_ready():
+        # Add synthetic dataset statistics if available
+        if self.synthetic_loader:
             try:
-                tts_stats = self.tts_augmenter.get_dataset_statistics()
-                stats['tts_augmenter']['available_keywords'] = tts_stats.get('unique_keywords')
-                stats['tts_augmenter']['samples_per_keyword'] = tts_stats.get('samples_per_keyword')
-                stats['tts_augmenter']['total_samples'] = tts_stats.get('total_samples')
+                loader_stats = self.synthetic_loader.get_dataset_statistics()
+                stats['synthetic_augmentation']['total_samples'] = loader_stats.get('total_samples')
+                stats['synthetic_augmentation']['samples_per_keyword'] = loader_stats.get('samples_per_keyword')
             except Exception as e:
-                logger.warning(f"Could not get TTS statistics: {e}")
+                logger.warning(f"Could not get synthetic dataset statistics: {e}")
         
-        return stats {
-            'current_positive': n_positive,
-            'current_negative': n_negative,
-            'target_positive': target_positive,
-            'samples_needed': samples_needed,
-            'current_ratio': current_ratio
-        }
-    
-    def apply_tts_augmentation(self, keywords: List[str], n_samples: int,
-                             random_state: Optional[int] = None
-                             ) -> Tuple[List[torch.Tensor], List[str]]:
-        """
-        Apply TTS (synthetic) augmentation.
-        
-        Args:
-            keywords: List of target keywords
-            n_samples: Number of samples to generate
-            random_state: Random seed for reproducibility
-        
-        Returns:
-            Tuple of (audio_samples, labels)
-        """
-        if n_samples <= 0:
-            return [], []
-        
-        if not self.tts_augmenter.is_ready():
-            raise RuntimeError(
-                "TTS augmenter not ready. No synthetic dataset loaded. "
-                "Generate one using: python synthetic_data_generator.py"
-            )
-        
-        logger.info(f"Applying TTS augmentation: {n_samples} samples")
-        
-        return self.tts_augmenter.generate_tts_samples(
-            keywords,
-            n_samples,
-            random_state
-        )
-    
-    def apply_adversarial_augmentation(self, audio_files: List[torch.Tensor],
-                                     labels: List[str], n_samples: int
-                                     ) -> Tuple[List[torch.Tensor], List[str]]:
-        """
-        Apply adversarial (FGSM) augmentation.
-        
-        Args:
-            audio_files: Original audio samples
-            labels: Original labels
-            n_samples: Number of adversarial samples to generate
-        
-        Returns:
-            Tuple of (audio_samples, labels)
-        """
-        if n_samples <= 0:
-            return [], []
-        
-        if not self.adversarial_augmenter.is_ready():
-            raise RuntimeError(
-                "Adversarial augmenter not ready. No target model set. "
-                "Call set_adversarial_model() first."
-            )
-        
-        logger.info(f"Applying adversarial augmentation: {n_samples} samples")
-        
-        return self.adversarial_augmenter.generate_adversarial_samples(
-            audio_files,
-            labels,
-            n_samples
-        )
-    
-    def apply_combined_augmentation(self, audio_files: List[torch.Tensor],
-                                  labels: List[str], keywords: List[str],
-                                  n_samples: int,
-                                  random_state: Optional[int] = None,
-                                  tts_ratio: float = 0.5
-                                  ) -> Tuple[List[torch.Tensor], List[str]]:
-        """
-        Apply combined TTS + adversarial augmentation.
-        
-        Args:
-            audio_files: Original audio samples
-            labels: Original labels
-            keywords: List of target keywords
-            n_samples: Total number of samples to generate
-            random_state: Random seed for reproducibility
-            tts_ratio: Proportion of samples to generate with TTS (default 0.5)
-        
-        Returns:
-            Tuple of (audio_samples, labels)
-        """
-        if n_samples <= 0:
-            return [], []
-        
-        # Split samples between methods
-        n_tts = int(n_samples * tts_ratio)
-        n_adversarial = n_samples - n_tts
-        
-        logger.info(
-            f"Applying combined augmentation: {n_tts} TTS + "
-            f"{n_adversarial} adversarial = {n_samples} total"
-        )
-        
-        # Generate TTS samples
-        tts_audio, tts_labels = self.apply_tts_augmentation(
-            keywords,
-            n_tts,
-            random_state
-        )
-        
-        # Generate adversarial samples
-        adv_audio, adv_labels = self.apply_adversarial_augmentation(
-            audio_files,
-            labels,
-            n_adversarial
-        )
-        
-        # Combine samples
-        combined_audio = tts_audio + adv_audio
-        combined_labels = tts_labels + adv_labels
-        
-        logger.info(
-            f"Combined augmentation generated {len(combined_audio)} samples "
-            f"({len(tts_audio)} TTS + {len(adv_audio)} adversarial)"
-        )
-        
-        return
+        return stats
