@@ -1,6 +1,6 @@
 """
 Dataset management for Google Speech Commands experiments.
-WITH EXPLICIT VOCABULARY CONTROL
+WITH REALISTIC KEYWORD SPOTTING (target keywords vs. ALL other words)
 """
 import torch
 import torchaudio
@@ -80,71 +80,59 @@ class GSCDatasetManager:
         """
         Load dataset with controlled vocabulary.
         
-        CRITICAL: Only loads samples from target_keywords + negative_keywords.
-        This ensures reproducible, well-defined experimental conditions.
+        Strategy: Load ALL words, shuffle, then limit to size.
+        This ensures diverse representation of both positive keywords
+        and negative (all other) words, matching real-world keyword spotting.
         """
         dataset = self.load_raw_dataset()
-        
-        # Define allowed vocabulary
-        allowed_vocabulary = set(self.target_keywords + self.negative_keywords)
         
         max_samples = self.dataset_size_limits[size]
         
         if max_samples:
-            print(f"📏 Loading {size} dataset (max {max_samples} samples from controlled vocabulary)")
+            print(f"📏 Loading {size} dataset (max {max_samples} samples)")
         else:
-            print(f"📏 Loading full dataset from controlled vocabulary")
+            print(f"📏 Loading full dataset")
         
-        print(f"   Positive: {self.target_keywords}")
-        print(f"   Negative: {self.negative_keywords}")
+        print(f"   Positive keywords: {self.target_keywords}")
+        print(f"   Negative class: All other words")
         
-        # Load samples organized by label
+        # Load ALL samples without filtering
         print(f"\n📂 Loading audio samples from Google Speech Commands...")
         
-        label_to_samples = {}
-        total_processed = 0
+        audio_files = []
+        labels = []
         
-        # First pass: collect all samples from allowed vocabulary
-        for waveform, sample_rate, label, speaker_id, utterance_number in tqdm(dataset, desc="Scanning dataset"):
-            # Skip if not in our controlled vocabulary
-            if label not in allowed_vocabulary:
-                continue
-            
+        for waveform, sample_rate, label, speaker_id, utterance_number in tqdm(dataset, desc="Processing audio"):
             # Preprocess audio
             processed_audio = self.audio_processor.preprocess_audio(waveform, sample_rate)
             
             # Validate processed audio
             if self.audio_processor.validate_audio(processed_audio):
-                if label not in label_to_samples:
-                    label_to_samples[label] = []
-                label_to_samples[label].append(processed_audio)
-                total_processed += 1
+                audio_files.append(processed_audio)
+                labels.append(label)
         
-        print(f"\n✓ Loaded {total_processed} samples from {len(label_to_samples)} labels")
+        print(f"\n✓ Loaded {len(audio_files)} total samples")
         
         # Show distribution
-        label_counts = {label: len(samples) for label, samples in label_to_samples.items()}
-        print(f"📊 Distribution: {label_counts}")
+        label_counts = Counter(labels)
+        print(f"📊 Label distribution (top 10): {dict(label_counts.most_common(10))}")
+        print(f"   Total unique labels: {len(label_counts)}")
         
-        # Check we have all required keywords
-        missing_positive = [kw for kw in self.target_keywords if kw not in label_to_samples]
-        missing_negative = [kw for kw in self.negative_keywords if kw not in label_to_samples]
+        # Count positive vs negative
+        n_positive = sum(1 for label in labels if label in self.target_keywords)
+        n_negative = len(labels) - n_positive
         
-        if missing_positive:
-            logger.warning(f"Missing positive keywords: {missing_positive}")
-            print(f"⚠️  WARNING: Missing positive keywords: {missing_positive}")
+        print(f"\n📈 Class distribution BEFORE limiting:")
+        print(f"   Positive ({self.target_keywords}): {n_positive}")
+        print(f"   Negative (all others): {n_negative}")
         
-        if missing_negative:
-            logger.warning(f"Missing negative keywords: {missing_negative}")
-            print(f"⚠️  WARNING: Missing negative keywords: {missing_negative}")
-        
-        # Combine all samples
-        audio_files = []
-        labels = []
-        
-        for label, samples in label_to_samples.items():
-            audio_files.extend(samples)
-            labels.extend([label] * len(samples))
+        # Check we have positive samples
+        if n_positive == 0:
+            missing = [kw for kw in self.target_keywords if kw not in label_counts]
+            raise ValueError(
+                f"No positive samples found! Missing keywords: {missing}\n"
+                f"Available labels: {list(label_counts.keys())[:20]}..."
+            )
         
         # Shuffle to mix positive and negative classes
         combined = list(zip(audio_files, labels))
@@ -160,10 +148,16 @@ class GSCDatasetManager:
         
         # Final distribution
         final_counts = Counter(labels)
-        print(f"\n✓ Final dataset: {len(audio_files)} samples")
-        print(f"📊 Final distribution: {dict(final_counts)}")
+        n_positive_final = sum(1 for label in labels if label in self.target_keywords)
+        n_negative_final = len(labels) - n_positive_final
         
-        logger.info(f"Loaded {len(audio_files)} samples from controlled vocabulary")
+        print(f"\n✓ Final dataset: {len(audio_files)} samples")
+        print(f"📊 Class distribution AFTER limiting:")
+        print(f"   Positive: {n_positive_final} ({n_positive_final/len(labels)*100:.1f}%)")
+        print(f"   Negative: {n_negative_final} ({n_negative_final/len(labels)*100:.1f}%)")
+        print(f"   Unique labels: {len(final_counts)}")
+        
+        logger.info(f"Loaded {len(audio_files)} samples: {n_positive_final} positive, {n_negative_final} negative")
         
         return audio_files, labels
     
@@ -214,7 +208,7 @@ class GSCDatasetManager:
         
         if n_negative_available == 0:
             raise ValueError(
-                f"No negative samples found! Check that negative_keywords are present."
+                f"No negative samples found! This should not happen with realistic keyword spotting."
             )
         
         # Calculate target counts to achieve exact imbalance ratio
