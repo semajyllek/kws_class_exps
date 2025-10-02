@@ -10,7 +10,7 @@ from typing import List, Tuple, Dict, Optional
 import logging
 
 logger = logging.getLogger(__name__)
-
+logger.setLevel(logging.INFO)
 
 class SyntheticDatasetLoader:
     """Loads pre-generated synthetic datasets."""
