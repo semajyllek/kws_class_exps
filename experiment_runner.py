@@ -63,7 +63,6 @@ class ExperimentRunner:
         logger.addHandler(file_handler)
         logger.info("Experiment logging initialized")
         logger.info(f"Vocabulary - Positive: {self.config.target_keywords}")
-        logger.info(f"Vocabulary - Negative: {self.config.negative_keywords}")
     
     def set_random_seed(self, seed: int):
         """Set random seed for reproducibility"""
