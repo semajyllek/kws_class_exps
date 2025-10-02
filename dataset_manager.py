@@ -1,5 +1,6 @@
 """
 Dataset management for Google Speech Commands experiments.
+WITH EXPLICIT VOCABULARY CONTROL
 """
 import torch
 import torchaudio
@@ -13,15 +14,19 @@ from tqdm import tqdm
 from audio_processing import AudioProcessor
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 class GSCDatasetManager:
     """Manages Google Speech Commands dataset loading and manipulation"""
     
-    def __init__(self, root_dir: str, version: str = 'v2'):
+    def __init__(self, root_dir: str, version: str = 'v2', 
+                 target_keywords: List[str] = None):
         self.root_dir = Path(root_dir)
         self.version = version
         self.audio_processor = AudioProcessor()
+        
+        # VOCABULARY CONTROL - only need to specify positive keywords
+        # Negative class = everything else (realistic keyword spotting)
+        self.target_keywords = target_keywords or ['forward', 'backward', 'left', 'right']
         
         # Define dataset size limits
         self.dataset_size_limits = {
@@ -30,10 +35,13 @@ class GSCDatasetManager:
             'large': 10000,
             'full': None
         }
+        
+        logger.info(f"Dataset manager initialized")
+        logger.info(f"  Positive keywords: {self.target_keywords}")
+        logger.info(f"  Negative class: All other words (realistic keyword spotting)")
     
     def _check_dataset_exists(self) -> bool:
         """Check if dataset is already downloaded and extracted"""
-        # Check for the extracted dataset directory structure
         dataset_dir = self.root_dir / 'SpeechCommands' / 'speech_commands_v0.02'
         return dataset_dir.exists() and len(list(dataset_dir.glob('*'))) > 0
     
@@ -41,7 +49,6 @@ class GSCDatasetManager:
         """Load raw Google Speech Commands dataset"""
         logger.info(f"Loading GSC {self.version} dataset from {self.root_dir}")
         
-        # Check if dataset needs to be downloaded/extracted
         dataset_exists = self._check_dataset_exists()
         
         if not dataset_exists:
@@ -68,64 +75,97 @@ class GSCDatasetManager:
             print("="*60 + "\n")
         
         return dataset
-
-    
-    def extract_audio_labels(self, dataset, max_samples: int = None) -> Tuple[List[torch.Tensor], List[str]]:
-        """Extract and preprocess audio samples with labels"""
-        audio_files = []
-        labels = []
-        
-        # Get dataset length for progress bar
-        try:
-            total = len(dataset) if max_samples is None else min(len(dataset), max_samples)
-        except:
-            total = max_samples
-        
-        logger.info(f"Extracting samples (max: {max_samples or 'unlimited'})")
-        print(f"\n📂 Loading audio samples from Google Speech Commands...")
-        
-        # Add progress bar
-        with tqdm(total=total, desc="Processing audio", unit="samples") as pbar:
-            for i, (waveform, sample_rate, label, speaker_id, utterance_number) in enumerate(dataset):
-                if max_samples and i >= max_samples:
-                    break
-                
-                # Preprocess audio
-                processed_audio = self.audio_processor.preprocess_audio(waveform, sample_rate)
-                
-                # Validate processed audio
-                if self.audio_processor.validate_audio(processed_audio):
-                    audio_files.append(processed_audio)
-                    labels.append(label)
-                else:
-                    logger.warning(f"Skipping invalid audio sample {i}")
-                
-                # Update progress bar
-                pbar.update(1)
-                
-                # Update description every 1000 samples
-                if i % 1000 == 0 and i > 0:
-                    pbar.set_postfix({'valid': len(audio_files), 'invalid': i - len(audio_files)})
-        
-        # Log label distribution
-        label_counts = Counter(labels)
-        print(f"\n✓ Loaded {len(audio_files)} valid samples")
-        print(f"📊 Top labels: {dict(label_counts.most_common(10))}")
-        
-        logger.info(f"Extracted {len(audio_files)} valid samples")
-        return audio_files, labels
     
     def load_dataset(self, size: str = 'full') -> Tuple[List[torch.Tensor], List[str]]:
-        """Load dataset with specified size constraint"""
+        """
+        Load dataset with controlled vocabulary.
+        
+        CRITICAL: Only loads samples from target_keywords + negative_keywords.
+        This ensures reproducible, well-defined experimental conditions.
+        """
         dataset = self.load_raw_dataset()
+        
+        # Define allowed vocabulary
+        allowed_vocabulary = set(self.target_keywords + self.negative_keywords)
+        
         max_samples = self.dataset_size_limits[size]
         
         if max_samples:
-            print(f"📏 Loading {size} dataset (max {max_samples} samples)")
+            print(f"📏 Loading {size} dataset (max {max_samples} samples from controlled vocabulary)")
         else:
-            print(f"📏 Loading full dataset (this may take 5-10 minutes)")
+            print(f"📏 Loading full dataset from controlled vocabulary")
         
-        return self.extract_audio_labels(dataset, max_samples)
+        print(f"   Positive: {self.target_keywords}")
+        print(f"   Negative: {self.negative_keywords}")
+        
+        # Load samples organized by label
+        print(f"\n📂 Loading audio samples from Google Speech Commands...")
+        
+        label_to_samples = {}
+        total_processed = 0
+        
+        # First pass: collect all samples from allowed vocabulary
+        for waveform, sample_rate, label, speaker_id, utterance_number in tqdm(dataset, desc="Scanning dataset"):
+            # Skip if not in our controlled vocabulary
+            if label not in allowed_vocabulary:
+                continue
+            
+            # Preprocess audio
+            processed_audio = self.audio_processor.preprocess_audio(waveform, sample_rate)
+            
+            # Validate processed audio
+            if self.audio_processor.validate_audio(processed_audio):
+                if label not in label_to_samples:
+                    label_to_samples[label] = []
+                label_to_samples[label].append(processed_audio)
+                total_processed += 1
+        
+        print(f"\n✓ Loaded {total_processed} samples from {len(label_to_samples)} labels")
+        
+        # Show distribution
+        label_counts = {label: len(samples) for label, samples in label_to_samples.items()}
+        print(f"📊 Distribution: {label_counts}")
+        
+        # Check we have all required keywords
+        missing_positive = [kw for kw in self.target_keywords if kw not in label_to_samples]
+        missing_negative = [kw for kw in self.negative_keywords if kw not in label_to_samples]
+        
+        if missing_positive:
+            logger.warning(f"Missing positive keywords: {missing_positive}")
+            print(f"⚠️  WARNING: Missing positive keywords: {missing_positive}")
+        
+        if missing_negative:
+            logger.warning(f"Missing negative keywords: {missing_negative}")
+            print(f"⚠️  WARNING: Missing negative keywords: {missing_negative}")
+        
+        # Combine all samples
+        audio_files = []
+        labels = []
+        
+        for label, samples in label_to_samples.items():
+            audio_files.extend(samples)
+            labels.extend([label] * len(samples))
+        
+        # Shuffle to mix positive and negative classes
+        combined = list(zip(audio_files, labels))
+        np.random.shuffle(combined)
+        
+        # Limit to max_samples if specified
+        if max_samples and len(combined) > max_samples:
+            combined = combined[:max_samples]
+        
+        audio_files, labels = zip(*combined) if combined else ([], [])
+        audio_files = list(audio_files)
+        labels = list(labels)
+        
+        # Final distribution
+        final_counts = Counter(labels)
+        print(f"\n✓ Final dataset: {len(audio_files)} samples")
+        print(f"📊 Final distribution: {dict(final_counts)}")
+        
+        logger.info(f"Loaded {len(audio_files)} samples from controlled vocabulary")
+        
+        return audio_files, labels
     
     def convert_to_binary_labels(self, labels: List[str], 
                                target_keywords: List[str]) -> List[str]:
@@ -166,10 +206,18 @@ class GSCDatasetManager:
         
         logger.info(f"Available: {n_positive_available} positive, {n_negative_available} negative")
         
-        # FIXED: Calculate target counts to achieve exact imbalance ratio
-        # Strategy: Keep as many positives as possible, then calculate negatives needed
-        # to achieve target ratio: ratio = n_pos / n_neg, so n_neg = n_pos / ratio
+        if n_positive_available == 0:
+            raise ValueError(
+                f"No positive samples found! Check that target_keywords {target_keywords} "
+                f"are present in the loaded dataset."
+            )
         
+        if n_negative_available == 0:
+            raise ValueError(
+                f"No negative samples found! Check that negative_keywords are present."
+            )
+        
+        # Calculate target counts to achieve exact imbalance ratio
         if imbalance_ratio >= 1.0:
             # Balanced or positive-heavy: keep all positives, match with negatives
             n_positive = n_positive_available
@@ -184,7 +232,6 @@ class GSCDatasetManager:
                 # Not enough negatives, reduce positives instead
                 n_negative = n_negative_available
                 n_positive = int(n_negative * imbalance_ratio)
-                
                 logger.warning(f"Not enough negatives. Reducing positives to {n_positive}")
         
         # Sample the required number of samples

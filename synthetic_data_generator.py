@@ -1,5 +1,6 @@
 """
 Pre-generate large synthetic datasets using gTTS or Bark for reuse across experiments.
+UPDATED WITH NEW KEYWORD VOCABULARY: forward, backward, left, right
 """
 
 import torch
@@ -55,7 +56,8 @@ class SyntheticDatasetConfig:
     def __post_init__(self):
         """Set intelligent defaults"""
         if self.keywords is None:
-            self.keywords = ['yes', 'no', 'up', 'down']
+            # UPDATED: Use new directional control vocabulary
+            self.keywords = ['forward', 'backward', 'left', 'right']
         
         if self.output_dir is None:
             self.output_dir = os.environ.get('COLAB_SYNTHETIC_DIR', './synthetic_datasets')
@@ -159,6 +161,7 @@ class SyntheticDatasetGenerator:
         }
     
         logger.info(f"Generator initialized with {config.tts_engine.upper()} engine")
+        logger.info(f"  Keywords: {config.keywords}")
         logger.info(f"  {self.text_variations} text × {self.acoustic_variations} acoustic = "
                    f"{self.text_variations * self.acoustic_variations} samples/keyword")
         logger.info(f"  Target RMS: {self.target_rms:.6f}")
@@ -385,7 +388,9 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='Generate synthetic TTS datasets')
-    parser.add_argument('--keywords', nargs='+', default=['yes', 'no', 'up', 'down'])
+    parser.add_argument('--keywords', nargs='+', 
+                       default=['forward', 'backward', 'left', 'right'],
+                       help='Keywords to generate (default: directional commands)')
     parser.add_argument('--samples', type=int, default=500,
                        help='Samples per keyword to generate')
     parser.add_argument('--output-dir', type=str, default='./synthetic_datasets')
@@ -399,6 +404,7 @@ def main():
     
     print(f"\n{'='*60}")
     print(f"Generating dataset with {args.engine.upper()} engine")
+    print(f"Keywords: {args.keywords}")
     if args.engine == 'bark':
         print("NOTE: Bark is MUCH slower (~10-15 sec per sample)")
         print("      First run will download ~2GB of models")

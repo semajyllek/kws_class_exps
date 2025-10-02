@@ -15,7 +15,6 @@ from augmentation_manager import AugmentationManager
 from model_training import ModelTrainer
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 class ExperimentRunner:
     """Orchestrates systematic experimental evaluation"""
@@ -27,12 +26,12 @@ class ExperimentRunner:
         
         # ensure dataset root directory exists
         Path(config.dataset_root).mkdir(parents=True, exist_ok=True)        
-
   
-        # Initialize components
+        # Initialize components with vocabulary control
         self.dataset_manager = GSCDatasetManager(
             root_dir=config.dataset_root,
-            version=config.dataset_version
+            version=config.dataset_version,
+            target_keywords=config.target_keywords  # Only need positive keywords
         )
         
         self.augmentation_manager = AugmentationManager(
@@ -63,6 +62,8 @@ class ExperimentRunner:
         
         logger.addHandler(file_handler)
         logger.info("Experiment logging initialized")
+        logger.info(f"Vocabulary - Positive: {self.config.target_keywords}")
+        logger.info(f"Vocabulary - Negative: {self.config.negative_keywords}")
     
     def set_random_seed(self, seed: int):
         """Set random seed for reproducibility"""
@@ -84,9 +85,9 @@ class ExperimentRunner:
         self.set_random_seed(seed)
         
         try:
-            # Load base dataset
+            # Load base dataset (with controlled vocabulary)
             audio_files, labels = self.dataset_manager.load_dataset(dataset_size)
-            logger.info(f"Loaded {len(audio_files)} samples")
+            logger.info(f"Loaded {len(audio_files)} samples from controlled vocabulary")
             
             # Create imbalanced dataset
             audio_files, labels = self.dataset_manager.create_imbalanced_split(

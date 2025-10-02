@@ -18,7 +18,10 @@ class ExperimentConfig:
     # dataset configuration
     dataset_version: str = 'v2'
     dataset_root: str = field(default_factory=lambda: get_colab_path('./data', 'COLAB_DATA_DIR'))
-    target_keywords: List[str] = None
+    
+    # VOCABULARY CONTROL - only specify positive keywords
+    # Negative class = everything else (realistic keyword spotting scenario)
+    target_keywords: List[str] = None  # Positive class (minority in imbalanced experiments)
     
     # experimental grid
     dataset_sizes: List[str] = None
@@ -41,7 +44,6 @@ class ExperimentConfig:
         'gsc_energy_profile.json'
     ))    
 
-
     # TTS configuration
     tts_model_name: str = "gtts"
     
@@ -59,9 +61,12 @@ class ExperimentConfig:
     
 
     def __post_init__(self):
-        """Set default values"""
+        """Set default values with controlled vocabulary"""
+        
+        # POSITIVE CLASS: Directional commands (robot/device control)
+        # NEGATIVE CLASS: Everything else (realistic keyword spotting)
         if self.target_keywords is None:
-            self.target_keywords = ['yes', 'no', 'up', 'down']
+            self.target_keywords = ['forward', 'backward', 'left', 'right']
             
         if self.dataset_sizes is None:
             self.dataset_sizes = ['small', 'medium', 'large']
@@ -77,15 +82,15 @@ def create_quick_config() -> ExperimentConfig:
     """Create configuration for quick testing"""
     return ExperimentConfig(
         dataset_version='v2',
-        target_keywords=['yes', 'no', 'up', 'down'],
-        dataset_sizes=['large'],
+        target_keywords=['forward', 'backward', 'left', 'right'],
+        dataset_sizes=['small'],
         imbalance_ratios=[0.1, 0.5, 1.0],
-        augmentation_methods=['none', 'synthetic', 'adversarial'],
+        augmentation_methods=['none', 'tts', 'adversarial'],
         n_trials=2,
         n_epochs=10,
         synthetic_dataset_path=os.path.join(
             get_colab_path('./synthetic_datasets', 'COLAB_SYNTHETIC_DIR'),
-            'gsc_synthetic_comprehensive'  # CHANGED: Use comprehensive dataset
+            'gsc_synthetic_comprehensive'
         )
     )
 
@@ -93,7 +98,7 @@ def create_full_config() -> ExperimentConfig:
     """Create configuration for comprehensive study"""
     return ExperimentConfig(
         dataset_version='v2',
-        target_keywords=['yes', 'no', 'up', 'down'],
+        target_keywords=['forward', 'backward', 'left', 'right'],
         dataset_sizes=['small', 'medium', 'large', 'full'],
         imbalance_ratios=[0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0],
         augmentation_methods=['none', 'adversarial', 'tts', 'combined'],
@@ -106,7 +111,7 @@ def create_ablation_config() -> ExperimentConfig:
     """Create configuration for ablation studies"""
     return ExperimentConfig(
         dataset_version='v2',
-        target_keywords=['yes', 'no'],
+        target_keywords=['forward', 'backward'],
         dataset_sizes=['medium'],
         imbalance_ratios=[0.1, 0.2],
         augmentation_methods=['none', 'tts', 'adversarial', 'combined'],
