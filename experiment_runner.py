@@ -15,6 +15,7 @@ from augmentation_manager import AugmentationManager
 from model_training import ModelTrainer
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 class ExperimentRunner:
     """Orchestrates systematic experimental evaluation"""
@@ -157,7 +158,6 @@ class ExperimentRunner:
     
     def calculate_total_experiments(self) -> int:
         """Calculate total number of experiments to run"""
-        print("\n\n$$$$$$$$$$$$ Heyrar  $$$$$$$$$$$$$$$$$")
         return (len(self.config.dataset_sizes) * 
                 len(self.config.imbalance_ratios) * 
                 len(self.config.augmentation_methods) * 
