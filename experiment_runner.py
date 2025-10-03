@@ -45,6 +45,9 @@ class ExperimentRunner:
         self.results = []
         self.experiment_metadata = {}
         
+        # CACHE: Pre-load datasets once to avoid reloading for every experiment
+        self.dataset_cache = {}
+        
         # Setup logging
         self._setup_experiment_logging()
         
@@ -63,6 +66,7 @@ class ExperimentRunner:
         logger.addHandler(file_handler)
         logger.info("Experiment logging initialized")
         logger.info(f"Vocabulary - Positive: {self.config.target_keywords}")
+        logger.info(f"Vocabulary - Negative: All other words (realistic keyword spotting)")
     
     def set_random_seed(self, seed: int):
         """Set random seed for reproducibility"""
@@ -71,6 +75,29 @@ class ExperimentRunner:
         if torch.cuda.is_available():
             torch.cuda.manual_seed(seed)
             torch.cuda.manual_seed_all(seed)
+    
+    def _load_base_dataset_cached(self, dataset_size: str) -> Tuple[List[torch.Tensor], List[str]]:
+        """
+        Load base dataset with caching to avoid reloading for every experiment.
+        
+        The dataset is loaded once per size and reused across all experiments.
+        """
+        if dataset_size not in self.dataset_cache:
+            logger.info(f"Loading {dataset_size} dataset (first time - will be cached)")
+            print(f"\n🔄 Loading {dataset_size} dataset for the first time...")
+            print("    (This will be cached and reused for all experiments)")
+            
+            audio_files, labels = self.dataset_manager.load_dataset(dataset_size)
+            self.dataset_cache[dataset_size] = (audio_files, labels)
+            
+            logger.info(f"Cached {dataset_size} dataset: {len(audio_files)} samples")
+            print(f"✓ Cached {len(audio_files)} samples for reuse\n")
+        else:
+            logger.info(f"Using cached {dataset_size} dataset")
+            audio_files, labels = self.dataset_cache[dataset_size]
+        
+        # Return a copy to avoid modifying the cached version
+        return audio_files.copy(), labels.copy()
     
     def run_single_experiment(self, dataset_size: str, imbalance_ratio: float,
                             augmentation_method: str, trial: int) -> Dict:
@@ -84,9 +111,9 @@ class ExperimentRunner:
         self.set_random_seed(seed)
         
         try:
-            # Load base dataset (with controlled vocabulary)
-            audio_files, labels = self.dataset_manager.load_dataset(dataset_size)
-            logger.info(f"Loaded {len(audio_files)} samples from controlled vocabulary")
+            # Load base dataset (with caching!)
+            audio_files, labels = self._load_base_dataset_cached(dataset_size)
+            logger.info(f"Using cached dataset: {len(audio_files)} samples")
             
             # Create imbalanced dataset
             audio_files, labels = self.dataset_manager.create_imbalanced_split(
@@ -114,9 +141,8 @@ class ExperimentRunner:
                 train_audio, train_labels, test_audio, test_labels, self.config
             )
             
-            # Store model for adversarial generation in subsequent experiments
-            if augmentation_method in ['adversarial', 'combined']:
-                self.augmentation_manager.set_adversarial_model(trained_model)
+            # Note: We don't update the adversarial model here anymore
+            # It's set once per (dataset_size, imbalance_ratio) in run_experimental_grid()
             
             # Compile results
             result = {
@@ -179,9 +205,30 @@ class ExperimentRunner:
         
         experiment_count = 0
         
+        # PRE-LOAD: Load all dataset sizes once at the beginning
+        print("\n" + "="*60)
+        print("📦 PRE-LOADING DATASETS (one-time, will be cached)")
+        print("="*60)
+        for dataset_size in self.config.dataset_sizes:
+            self._load_base_dataset_cached(dataset_size)
+        print("="*60)
+        print("✓ All datasets cached and ready!")
+        print("="*60 + "\n")
+        
         # Nested loops for systematic grid search
         for dataset_size in self.config.dataset_sizes:
             for imbalance_ratio in self.config.imbalance_ratios:
+                
+                # TRAIN BASELINE MODEL ONCE per (dataset_size, imbalance_ratio)
+                # This model is used for adversarial augmentation
+                baseline_model = None
+                if 'adversarial' in self.config.augmentation_methods or 'combined' in self.config.augmentation_methods:
+                    logger.info(f"Training baseline model for adversarial generation ({dataset_size}, ratio={imbalance_ratio})")
+                    baseline_model = self._train_baseline_for_adversarial(dataset_size, imbalance_ratio)
+                    if baseline_model:
+                        self.augmentation_manager.set_adversarial_model(baseline_model)
+                        logger.info("Baseline model set for adversarial generation")
+                
                 for aug_method in self.config.augmentation_methods:
                     for trial in range(self.config.n_trials):
                         
@@ -210,6 +257,46 @@ class ExperimentRunner:
         # Save final results
         self._save_final_results()
         logger.info("Experimental grid completed!")
+    
+    def _train_baseline_for_adversarial(self, dataset_size: str, imbalance_ratio: float):
+        """
+        Train a baseline model for adversarial generation.
+        
+        This model is trained once per (dataset_size, imbalance_ratio) combination
+        and used to generate adversarial examples for all trials.
+        """
+        try:
+            print(f"\n🔧 Training baseline model for adversarial generation...")
+            print(f"   Dataset: {dataset_size}, Ratio: {imbalance_ratio}")
+            
+            # Use fixed seed for reproducibility
+            seed = 42
+            self.set_random_seed(seed)
+            
+            # Load and prepare data
+            audio_files, labels = self._load_base_dataset_cached(dataset_size)
+            audio_files, labels = self.dataset_manager.create_imbalanced_split(
+                audio_files, labels, self.config.target_keywords, imbalance_ratio
+            )
+            train_audio, train_labels, _, _ = self.dataset_manager.split_train_test(
+                audio_files, labels, test_ratio=0.2, random_state=seed
+            )
+            
+            # Train model (no augmentation for baseline)
+            print("   Training baseline model (this may take a few minutes)...")
+            _, baseline_model = self.model_trainer.full_training_pipeline(
+                train_audio, train_labels, train_audio[:10], train_labels[:10],  # Dummy test set
+                self.config
+            )
+            
+            print("✓ Baseline model ready for adversarial generation\n")
+            return baseline_model
+            
+        except Exception as e:
+            logger.error(f"Failed to train baseline model: {e}")
+            print(f"⚠️  Could not train baseline model: {e}")
+            print("   Adversarial experiments will be skipped")
+            return None
     
     def _save_intermediate_results(self, experiment_count: int):
         """Save intermediate results during long experiments"""
