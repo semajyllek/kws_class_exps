@@ -12,6 +12,8 @@ from sklearn.metrics import (accuracy_score, precision_recall_fscore_support,
 import logging
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
 
 class KeywordDataset(Dataset):
     """PyTorch Dataset for keyword detection"""
@@ -94,7 +96,7 @@ class ModelTrainer:
     
     def __init__(self, device: str = None):
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
-        print(f"Initialized trainer on device: {self.device}")
+        logger.info(f"Initialized trainer on device: {self.device}")
     
     def full_training_pipeline(self, train_audio: List[torch.Tensor], train_labels: List[str],
                              test_audio: List[torch.Tensor], test_labels: List[str],
@@ -133,7 +135,7 @@ class ModelTrainer:
             
             if epoch % 5 == 0:
                 avg_loss = total_loss / len(train_loader)
-                print(f"Epoch {epoch}: Train Loss = {avg_loss:.4f}")
+                logger.info(f"Epoch {epoch}: Train Loss = {avg_loss:.4f}")
         
         # Evaluate model
         test_metrics = self.evaluate_model(model, test_loader)

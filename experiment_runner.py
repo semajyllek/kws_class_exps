@@ -15,6 +15,7 @@ from augmentation_manager import AugmentationManager
 from model_training import ModelTrainer
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 class ExperimentRunner:
     """Orchestrates systematic experimental evaluation"""
