@@ -94,7 +94,7 @@ class ModelTrainer:
     
     def __init__(self, device: str = None):
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
-        logger.info(f"Initialized trainer on device: {self.device}")
+        print(f"Initialized trainer on device: {self.device}")
     
     def full_training_pipeline(self, train_audio: List[torch.Tensor], train_labels: List[str],
                              test_audio: List[torch.Tensor], test_labels: List[str],
@@ -133,7 +133,7 @@ class ModelTrainer:
             
             if epoch % 5 == 0:
                 avg_loss = total_loss / len(train_loader)
-                logger.debug(f"Epoch {epoch}: Train Loss = {avg_loss:.4f}")
+                logger.print(f"Epoch {epoch}: Train Loss = {avg_loss:.4f}")
         
         # Evaluate model
         test_metrics = self.evaluate_model(model, test_loader)
