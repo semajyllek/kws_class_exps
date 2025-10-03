@@ -24,6 +24,7 @@ def setup_logging(log_level: str = 'INFO'):
         ]
     )
     
+    logging.getLogger().setLevel(getattr(logging, log_level.upper())) 
     logger = logging.getLogger(__name__)
     logger.info("Logging initialized")
     return logger
