@@ -14,6 +14,7 @@ from tqdm import tqdm
 from audio_processing import AudioProcessor
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 class GSCDatasetManager:
     """Manages Google Speech Commands dataset loading and manipulation"""
