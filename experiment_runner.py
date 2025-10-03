@@ -331,27 +331,37 @@ class ExperimentRunner:
     
     def _generate_summary_statistics(self, results_df: pd.DataFrame):
         """Generate and save summary statistics"""
-        
+    
+        # Check if 'status' column exists, if not, assume all experiments succeeded
+        if 'status' in results_df.columns:
+            successful_count = len(results_df[results_df['status'] != 'failed'])
+            failed_count = len(results_df[results_df['status'] == 'failed'])
+        else:
+            # No status column means all experiments succeeded
+            successful_count = len(results_df)
+            failed_count = 0
+    
         summary_stats = {
             'total_experiments': len(results_df),
-            'successful_experiments': len(results_df[results_df.get('status') != 'failed']),
-            'failed_experiments': len(results_df[results_df.get('status') == 'failed']),
+            'successful_experiments': successful_count,
+            'failed_experiments': failed_count,
         }
-        
+    
         # Performance statistics by method
         if 'f1_keyword' in results_df.columns:
             method_performance = results_df.groupby('augmentation_method')['f1_keyword'].agg([
                 'mean', 'std', 'min', 'max', 'count'
             ]).round(4)
-            
-            summary_stats['method_performance'] = method_performance.to_dict()
         
+            summary_stats['method_performance'] = method_performance.to_dict()
+    
         # Save summary
         summary_file = self.save_dir / 'experiment_summary.json'
         with open(summary_file, 'w') as f:
             json.dump(summary_stats, f, indent=2)
-        
+    
         logger.info("Generated experiment summary statistics")
+
 
 def run_experiment_from_config(config: ExperimentConfig):
     """Convenience function to run experiment from configuration"""
