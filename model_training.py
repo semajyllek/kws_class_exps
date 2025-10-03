@@ -133,7 +133,7 @@ class ModelTrainer:
             
             if epoch % 5 == 0:
                 avg_loss = total_loss / len(train_loader)
-                logger.print(f"Epoch {epoch}: Train Loss = {avg_loss:.4f}")
+                print(f"Epoch {epoch}: Train Loss = {avg_loss:.4f}")
         
         # Evaluate model
         test_metrics = self.evaluate_model(model, test_loader)
