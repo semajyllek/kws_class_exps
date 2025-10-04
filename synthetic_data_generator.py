@@ -83,21 +83,87 @@ def calculate_variation_counts(target_samples: int) -> Tuple[int, int]:
 
 
 def generate_prosodic_variations(keyword: str, n_variations: int) -> List[str]:
-    """Generate prosodic variations of a keyword."""
+    """
+    Generate diverse prosodic variations of a keyword.
+    
+    ENHANCED with more variation types to improve diversity.
+    """
     variations = [
-        keyword,           # Neutral
-        keyword + "!",     # Excited
-        keyword + "?",     # Questioning
-        keyword + "...",   # Hesitant
-        keyword.upper(),   # Loud
-        keyword.lower(),   # Soft
+        # Basic forms
+        keyword,                          # Neutral
+        keyword.capitalize(),             # Capitalized
+        keyword.upper(),                  # All caps (loud)
+        keyword.lower(),                  # Lowercase (soft)
+        
+        # Punctuation (affects TTS prosody)
+        keyword + "!",                    # Excited
+        keyword + "?",                    # Questioning
+        keyword + ".",                    # Statement
+        keyword + "...",                  # Hesitant/trailing
+        keyword + "!!!",                  # Very excited
+        
+        # Repetition
+        keyword + " " + keyword,          # Repeated
+        keyword + ", " + keyword,         # Repeated with pause
+        keyword + " " + keyword + " " + keyword,  # Triple
+        
+        # Filler words (more natural)
+        "um, " + keyword,                 # Hesitation before
+        "uh, " + keyword,                 # Hesitation before
+        keyword + ", um",                 # Hesitation after
+        "so, " + keyword,                 # Discourse marker
+        "okay, " + keyword,               # Agreement marker
+        
+        # Polite forms
+        keyword + " please",              # Polite
+        "please " + keyword,              # Polite (front)
+        keyword + " thanks",              # Polite with thanks
+        
+        # Commands/requests
+        keyword + " now",                 # Urgent
+        keyword + " again",               # Repeated action
+        "go " + keyword,                  # Imperative
+        "move " + keyword,                # Imperative variation
+        
+        # Questions/confirmations
+        keyword + " right?",              # Confirmation
+        keyword + ", right?",             # Confirmation with pause
+        "is it " + keyword + "?",         # Question form
+        
+        # Emphasis patterns
+        keyword.upper() + "!",            # Loud excited
+        keyword + "!?",                   # Surprised question
+        "wait, " + keyword,               # Delayed
+        "no, " + keyword,                 # Correction
+        
+        # Spacing variations (affects timing)
+        " " + keyword + " ",              # Extra space
+        keyword + "  ",                   # Trailing space
+        "  " + keyword,                   # Leading space
+        
+        # Mixed case (if applicable)
+        keyword[0].upper() + keyword[1:] if len(keyword) > 1 else keyword,
+        
+        # With articles/determiners (if makes sense)
+        "the " + keyword,
+        "a " + keyword,
     ]
     
-    # Extend list if needed
+    # Ensure we have enough variations
     while len(variations) < n_variations:
-        variations.append(keyword)
+        # Add random combinations
+        import random
+        base = random.choice([keyword, keyword.upper(), keyword.lower()])
+        punct = random.choice(["", "!", "?", ".", "...", "!!", "!?"])
+        prefix = random.choice(["", "um, ", "uh, ", "so, ", "okay, ", "wait, "])
+        suffix = random.choice(["", " please", " now", " again", " right?", " thanks"])
+        
+        variation = prefix + base + suffix + punct
+        if variation not in variations:
+            variations.append(variation)
     
     return variations[:n_variations]
+
 
 
 def generate_sample_id(keyword: str, text_variant: str, variation_idx: int) -> str:
@@ -200,23 +266,29 @@ class SyntheticDatasetGenerator:
             if temp_file.exists():
                 temp_file.unlink()
  
- 
+
     def create_acoustic_variations(self, base_audio: torch.Tensor, 
-                                  n_variations: int, sample_id: str) -> List[torch.Tensor]:
+                              n_variations: int, sample_id: str) -> List[torch.Tensor]:
         """Generate acoustic variations from base sample."""
         variations = [base_audio]
-        
+    
+        variation_levels = ['medium', 'heavy']  # Mix of variation levels
+    
         for i in range(n_variations - 1):
             try:
-                variation = self.variation_generator.create_variation(base_audio, 'light')
-                
+                # Randomly choose variation level for diversity
+                level = np.random.choice(variation_levels)
+                variation = self.variation_generator.create_variation(base_audio, level)
+            
                 if validate_audio_quality(variation, self.config.min_energy_threshold):
                     variations.append(variation)
             except Exception as e:
                 logger.error(f"Acoustic variation {i} failed for {sample_id}: {e}")
-        
-        return variations
     
+        return variations 
+   
+
+ 
     def generate_keyword_samples(self, keyword: str) -> Tuple[List[torch.Tensor], List[Dict]]:
         """Generate all samples for one keyword."""
         logger.info(f"Generating samples for '{keyword}'")
