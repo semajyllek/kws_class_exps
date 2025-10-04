@@ -11,7 +11,7 @@ from synthetic_data_generator import SyntheticDatasetLoader
 from adversarial_augmenter import AdversarialAugmenter
 
 logger = logging.getLogger(__name__)
-
+logger.setLevel(logging.INFO)
 
 class AugmentationManager:
     """
@@ -232,7 +232,7 @@ class AugmentationManager:
         requirements = self.calculate_augmentation_requirements(labels, target_ratio)
         samples_needed = requirements['samples_needed']
         
-        print(
+        logger.info(
             f"Augmentation requirements for method '{method}': "
             f"{samples_needed} samples needed "
             f"(current: {requirements['current_positive']} pos, "
