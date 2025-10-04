@@ -92,40 +92,35 @@ class AugmentationManager:
             'current_ratio': current_ratio
         }
     
-    def apply_tts_augmentation(self, keywords: List[str], n_samples: int,
-                             random_state: Optional[int] = None
-                             ) -> Tuple[List[torch.Tensor], List[str]]:
-        """
-        Apply TTS (synthetic) augmentation.
-        
-        Args:
-            keywords: List of target keywords
-            n_samples: Number of samples to generate
-            random_state: Random seed for reproducibility
-        
-        Returns:
-            Tuple of (audio_samples, labels)
-        """
+    
+    def apply_tts_augmentation(self, keywords, n_samples, random_state):
         if n_samples <= 0:
             return [], []
-        
-        if not self.synthetic_loader:
-            raise RuntimeError(
-                "No synthetic dataset loaded. "
-                "Generate one using: python synthetic_data_generator.py"
-            )
-        
-        logger.info(f"Applying TTS augmentation: {n_samples} samples")
-        
-        # Distribute samples evenly across keywords
-        samples_per_keyword = max(1, n_samples // len(keywords))
-        
-        return self.synthetic_loader.get_balanced_samples(
-            keywords,
-            samples_per_keyword,
-            random_state
-        )
     
+        # Distribute samples across keywords, handling remainder
+        base_samples = n_samples // len(keywords)
+        remainder = n_samples % len(keywords)
+    
+        all_audio = []
+        all_labels = []
+    
+        for i, keyword in enumerate(keywords):
+            # Give remainder samples to first few keywords
+            samples_this_keyword = base_samples + (1 if i < remainder else 0)
+        
+            audio, labels = self.synthetic_loader.sample_keyword_data(
+                keyword, 
+                samples_this_keyword, 
+                random_state
+            )
+            all_audio.extend(audio)
+            all_labels.extend(labels)
+    
+        logger.info(f"TTS augmentation: generated {len(all_audio)} samples (requested {n_samples})")
+    
+        return all_audio, all_labels
+
+
     def apply_adversarial_augmentation(self, audio_files: List[torch.Tensor],
                                      labels: List[str], n_samples: int
                                      ) -> Tuple[List[torch.Tensor], List[str]]:

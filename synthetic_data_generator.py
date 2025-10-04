@@ -24,6 +24,8 @@ from tts_engine import TTSEngine
 from synthetic_data_loader import SyntheticDatasetLoader, check_dataset_exists
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
 
 DEFAULT_TARGET_RMS = 0.1
 
