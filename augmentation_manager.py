@@ -232,7 +232,7 @@ class AugmentationManager:
         requirements = self.calculate_augmentation_requirements(labels, target_ratio)
         samples_needed = requirements['samples_needed']
         
-        logger.info(
+        print(
             f"Augmentation requirements for method '{method}': "
             f"{samples_needed} samples needed "
             f"(current: {requirements['current_positive']} pos, "
