@@ -1,5 +1,11 @@
 """
-Adversarial augmentation using FGSM for keyword detection class imbalance.
+FIXED: Adversarial augmentation for data augmentation (not adversarial training).
+
+Key changes:
+1. Generate from MINORITY class (keywords) - create harder positive examples
+2. Use a BALANCED baseline model (not imbalanced)
+3. Use smaller, targeted perturbations
+4. Add quality validation
 """
 import torch
 import torch.nn as nn
@@ -10,304 +16,256 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class AdversarialAugmenter:
-    """Generates adversarial examples using Fast Gradient Sign Method (FGSM)"""
+class FixedAdversarialAugmenter:
+    """
+    Generates adversarial examples for data augmentation.
     
-    def __init__(self, epsilon: float = 0.01):
+    Strategy (CORRECTED):
+    - Take minority class (keyword) samples
+    - Add small perturbations to make them harder to classify
+    - Keep them labeled as keywords
+    - This creates challenging positive examples near decision boundary
+    """
+    
+    def __init__(self, epsilon: float = 0.005):
         """
         Initialize adversarial augmenter.
         
         Args:
-            epsilon: Perturbation magnitude for FGSM attack
+            epsilon: Perturbation magnitude (REDUCED from 0.01 to 0.005)
         """
         self.epsilon = epsilon
         self.model = None
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        logger.info(f"Initialized AdversarialAugmenter (epsilon={epsilon}, device={self.device})")
+        logger.info(f"Initialized FixedAdversarialAugmenter (epsilon={epsilon})")
     
     def set_target_model(self, model: nn.Module):
-        """
-        Set the target model for adversarial generation.
-        
-        Args:
-            model: Trained PyTorch model to generate adversarial examples against
-        """
+        """Set the target model for adversarial generation."""
         self.model = model.to(self.device)
-        self.model.eval()  # Set to evaluation mode
-        
-        logger.info(f"Set target model for adversarial generation (epsilon={self.epsilon})")
+        self.model.eval()
+        logger.info("Set target model for adversarial generation")
     
     def is_ready(self) -> bool:
-        """Check if augmenter is ready to generate samples"""
+        """Check if augmenter is ready"""
         return self.model is not None
     
-    def validate_ready(self):
-        """Raise error if model is not set"""
+    def generate_fgsm_perturbation(self, audio: torch.Tensor, 
+                                   true_label: int) -> torch.Tensor:
+        """
+        Generate adversarial perturbation using FGSM.
+        
+        CORRECTED: We want to KEEP the same label but make it harder to classify.
+        Strategy: Maximize loss for the TRUE class (pushes toward decision boundary).
+        """
         if not self.is_ready():
-            raise RuntimeError(
-                "No target model set for adversarial generation. "
-                "Call set_target_model() with a trained model first."
-            )
-    
-    def generate_fgsm_sample(self, audio: torch.Tensor, target_class: int) -> torch.Tensor:
-        """
-        Generate single adversarial example using FGSM.
-        
-        Args:
-            audio: Input audio tensor
-            target_class: Target class label (0 or 1)
-        
-        Returns:
-            Adversarial audio tensor
-        """
-        self.validate_ready()
+            raise RuntimeError("Model not set")
         
         # Prepare input
         audio_input = audio.clone().detach().to(self.device)
         audio_input.requires_grad_(True)
         
-        target_tensor = torch.tensor([target_class], dtype=torch.long, device=self.device)
+        label_tensor = torch.tensor([true_label], dtype=torch.long, device=self.device)
         
         # Forward pass
         self.model.zero_grad()
         output = self.model(audio_input.unsqueeze(0))
         
-        # Calculate loss (we want to maximize loss for target class)
-        loss = nn.CrossEntropyLoss()(output, target_tensor)
+        # Calculate loss - we want to MAXIMIZE loss for true class
+        # This pushes the sample toward the decision boundary
+        loss = nn.CrossEntropyLoss()(output, label_tensor)
         
-        # Backward pass to get gradients
+        # Backward pass
         loss.backward()
         
-        # Generate adversarial perturbation using gradient sign
-        audio_grad = audio_input.grad.data
-        sign_grad = audio_grad.sign()
+        # Get gradient sign
+        grad_sign = audio_input.grad.data.sign()
         
-        # Apply perturbation
-        adversarial_audio = audio_input.detach() + self.epsilon * sign_grad
+        # Create perturbation (positive gradient increases loss)
+        perturbed = audio_input.detach() + self.epsilon * grad_sign
         
-        # Ensure audio remains in valid range [-1, 1]
-        adversarial_audio = torch.clamp(adversarial_audio, -1.0, 1.0)
+        # Clip to valid audio range
+        perturbed = torch.clamp(perturbed, -1.0, 1.0)
         
-        return adversarial_audio.cpu()
+        return perturbed.cpu()
     
     def select_source_samples(self, audio_files: List[torch.Tensor],
-                            labels: List[str], n_samples: int) -> List[Tuple[torch.Tensor, int]]:
+                            labels: List[str], n_samples: int
+                            ) -> List[Tuple[torch.Tensor, int, int]]:
         """
         Select source samples for adversarial generation.
         
-        Strategy: Use majority class (non-keyword) samples and flip them to minority class (keyword).
-        
-        Args:
-            audio_files: List of audio tensors
-            labels: List of corresponding labels
-            n_samples: Number of samples to select
+        CORRECTED: Use MINORITY class (keyword) samples.
+        We want to create harder positive examples, not fake positives from negatives.
         
         Returns:
-            List of (audio, target_label) tuples
+            List of (audio, true_label, index) tuples
         """
-        # Get indices of majority class samples
-        majority_class_indices = [
+        # Get MINORITY class indices
+        minority_indices = [
             i for i, label in enumerate(labels)
-            if label == 'non_keyword'
+            if label == 'keyword'
         ]
         
-        if len(majority_class_indices) == 0:
-            logger.error("No majority class samples available for adversarial generation")
+        if len(minority_indices) == 0:
+            logger.error("No minority class samples available")
             return []
         
-        if len(majority_class_indices) < n_samples:
-            logger.warning(
-                f"Only {len(majority_class_indices)} majority samples available, "
-                f"requested {n_samples}. Using all available samples."
-            )
-            selected_indices = majority_class_indices
-        else:
-            # Randomly sample from majority class
-            selected_indices = np.random.choice(
-                majority_class_indices,
-                n_samples,
-                replace=False
-            ).tolist()
+        # Sample with replacement if needed (we can perturb same sample differently)
+        n_available = len(minority_indices)
+        replace = n_samples > n_available
         
-        # Return (audio, target_label) pairs - flip to keyword class (label 1)
-        source_samples = [(audio_files[i], 1) for i in selected_indices]
+        selected_indices = np.random.choice(
+            minority_indices,
+            size=min(n_samples, n_available * 3),  # Limit to 3x oversampling
+            replace=replace
+        ).tolist()
         
-        logger.info(f"Selected {len(source_samples)} source samples for adversarial generation")
+        # Return (audio, label=1 for keyword, index) tuples
+        source_samples = [
+            (audio_files[i], 1, i) for i in selected_indices
+        ]
+        
+        logger.info(f"Selected {len(source_samples)} minority samples for adversarial generation")
         
         return source_samples
     
-    def generate_adversarial_batch(self, source_samples: List[Tuple[torch.Tensor, int]]
+    def generate_adversarial_batch(self, source_samples: List[Tuple[torch.Tensor, int, int]]
                                  ) -> List[torch.Tensor]:
-        """
-        Generate adversarial samples in batch.
-        
-        Args:
-            source_samples: List of (audio, target_class) tuples
-        
-        Returns:
-            List of adversarial audio tensors
-        """
+        """Generate adversarial samples in batch."""
         adversarial_samples = []
         
-        for i, (audio, target_class) in enumerate(source_samples):
+        for i, (audio, true_label, orig_idx) in enumerate(source_samples):
             try:
-                adv_sample = self.generate_fgsm_sample(audio, target_class)
-                adversarial_samples.append(adv_sample)
+                # Generate perturbation
+                adv_sample = self.generate_fgsm_perturbation(audio, true_label)
+                
+                # Validate quality
+                if self._validate_adversarial(audio, adv_sample):
+                    adversarial_samples.append(adv_sample)
+                else:
+                    logger.debug(f"Sample {i} failed validation, skipping")
                 
                 if (i + 1) % 100 == 0:
                     logger.debug(f"Generated {i + 1}/{len(source_samples)} adversarial samples")
                     
             except Exception as e:
                 logger.error(f"Failed to generate adversarial sample {i}: {e}")
-                # Skip this sample - don't use fallbacks in scientific experiments
                 continue
         
-        logger.info(f"Successfully generated {len(adversarial_samples)}/{len(source_samples)} adversarial samples")
+        logger.info(f"Generated {len(adversarial_samples)}/{len(source_samples)} valid adversarial samples")
         
         return adversarial_samples
     
-    def validate_adversarial_samples(self, original_samples: List[torch.Tensor],
-                                   adversarial_samples: List[torch.Tensor]) -> Tuple[List[torch.Tensor], List[int]]:
+    def _validate_adversarial(self, original: torch.Tensor, 
+                            adversarial: torch.Tensor) -> bool:
         """
-        Validate that adversarial samples are properly perturbed.
+        Validate adversarial sample quality.
         
-        Args:
-            original_samples: Original audio samples
-            adversarial_samples: Generated adversarial samples
-        
-        Returns:
-            Tuple of (valid_samples, invalid_indices)
+        Checks:
+        1. Perturbation is within epsilon bounds
+        2. No NaN/Inf values
+        3. Stays in valid audio range
+        4. Not too similar to original (some diversity)
         """
-        valid_samples = []
-        invalid_indices = []
+        # Check for invalid values
+        if torch.isnan(adversarial).any() or torch.isinf(adversarial).any():
+            return False
         
-        for i, (orig, adv) in enumerate(zip(original_samples, adversarial_samples)):
-            # Check that perturbation is within bounds
-            perturbation = (adv - orig).abs().max().item()
-            
-            # Allow small numerical error (10% tolerance)
-            if perturbation > self.epsilon * 1.1:
-                logger.warning(
-                    f"Sample {i}: perturbation {perturbation:.6f} exceeds "
-                    f"epsilon {self.epsilon} by {(perturbation/self.epsilon - 1)*100:.1f}%"
-                )
-            
-            # Check for valid audio properties
-            is_valid = True
-            
-            if torch.isnan(adv).any() or torch.isinf(adv).any():
-                logger.warning(f"Sample {i}: contains NaN or Inf values")
-                is_valid = False
-            
-            if adv.abs().max() > 1.0:
-                logger.warning(f"Sample {i}: exceeds valid range [-1, 1]")
-                is_valid = False
-            
-            if is_valid:
-                valid_samples.append(adv)
-            else:
-                invalid_indices.append(i)
+        # Check audio range
+        if adversarial.abs().max() > 1.0:
+            return False
         
-        logger.info(
-            f"Validated {len(valid_samples)}/{len(adversarial_samples)} adversarial samples "
-            f"({len(invalid_indices)} failed validation)"
-        )
+        # Check perturbation magnitude
+        perturbation = (adversarial - original).abs()
+        max_pert = perturbation.max().item()
         
-        return valid_samples, invalid_indices
+        if max_pert > self.epsilon * 1.2:  # Allow 20% tolerance
+            logger.debug(f"Perturbation too large: {max_pert:.6f} > {self.epsilon * 1.2:.6f}")
+            return False
+        
+        # Check that there IS some perturbation (not identical)
+        if max_pert < self.epsilon * 0.1:  # At least 10% of epsilon
+            logger.debug(f"Perturbation too small: {max_pert:.6f}")
+            return False
+        
+        return True
     
     def generate_adversarial_samples(self, audio_files: List[torch.Tensor],
                                    labels: List[str], n_samples: int
                                    ) -> Tuple[List[torch.Tensor], List[str]]:
         """
-        Generate adversarial samples for dataset balancing (main interface).
+        Generate adversarial samples for dataset augmentation (main interface).
+        
+        CORRECTED: Generates hard positive examples from minority class.
         
         Args:
-            audio_files: List of original audio samples
-            labels: List of corresponding labels
+            audio_files: Original audio samples
+            labels: Original labels
             n_samples: Number of adversarial samples to generate
         
         Returns:
             Tuple of (adversarial_audio, adversarial_labels)
         """
-        self.validate_ready()
+        if not self.is_ready():
+            raise RuntimeError("Model not set. Call set_target_model() first.")
         
         if n_samples <= 0:
             return [], []
         
-        logger.info(f"Generating {n_samples} adversarial samples using FGSM (epsilon={self.epsilon})")
+        logger.info(f"Generating {n_samples} adversarial samples (epsilon={self.epsilon})")
         
-        # Select source samples from majority class
+        # Select minority class samples
         source_samples = self.select_source_samples(audio_files, labels, n_samples)
         
         if not source_samples:
-            logger.error("No source samples available for adversarial generation")
+            logger.error("No source samples available")
             return [], []
         
-        # Generate adversarial samples
+        # Generate adversarial examples
         adversarial_audio = self.generate_adversarial_batch(source_samples)
         
         if not adversarial_audio:
-            logger.error("Failed to generate any adversarial samples")
+            logger.error("Failed to generate any valid adversarial samples")
             return [], []
         
-        # Validate generated samples
-        original_audio = [sample[0] for sample in source_samples[:len(adversarial_audio)]]
-        adversarial_audio, invalid_indices = self.validate_adversarial_samples(
-            original_audio,
-            adversarial_audio
-        )
-        
-        # Create labels (all adversarial samples become positive/keyword class)
+        # All adversarial samples keep their original label (keyword)
         adversarial_labels = ['keyword'] * len(adversarial_audio)
         
-        logger.info(f"Successfully generated {len(adversarial_audio)} valid adversarial samples")
+        logger.info(f"Successfully generated {len(adversarial_audio)} adversarial samples")
         
         return adversarial_audio, adversarial_labels
     
     def analyze_perturbations(self, original_samples: List[torch.Tensor],
                             adversarial_samples: List[torch.Tensor]) -> dict:
-        """
-        Analyze characteristics of generated perturbations.
-        
-        Args:
-            original_samples: Original audio samples
-            adversarial_samples: Generated adversarial samples
-        
-        Returns:
-            Dictionary with perturbation statistics
-        """
+        """Analyze characteristics of generated perturbations."""
         if len(original_samples) != len(adversarial_samples):
-            raise ValueError("Mismatch in sample counts for perturbation analysis")
+            raise ValueError("Sample count mismatch")
         
-        perturbation_stats = {
+        stats = {
             'l2_norm': [],
-            'max_perturbation': [],
+            'max_pert': [],
+            'mean_pert': [],
             'snr_db': []
         }
         
         for orig, adv in zip(original_samples, adversarial_samples):
-            perturbation = adv - orig
+            pert = adv - orig
             
-            # L2 norm of perturbation
-            l2_norm = torch.norm(perturbation).item()
-            perturbation_stats['l2_norm'].append(l2_norm)
+            stats['l2_norm'].append(torch.norm(pert).item())
+            stats['max_pert'].append(pert.abs().max().item())
+            stats['mean_pert'].append(pert.abs().mean().item())
             
-            # Maximum absolute perturbation
-            max_pert = perturbation.abs().max().item()
-            perturbation_stats['max_perturbation'].append(max_pert)
-            
-            # Signal-to-noise ratio
+            # SNR
             signal_power = torch.norm(orig) ** 2
-            noise_power = torch.norm(perturbation) ** 2
-            
+            noise_power = torch.norm(pert) ** 2
             if noise_power > 1e-10:
-                snr_db = 10 * torch.log10(signal_power / noise_power).item()
-                perturbation_stats['snr_db'].append(snr_db)
+                snr = 10 * torch.log10(signal_power / noise_power).item()
+                stats['snr_db'].append(snr)
         
-        # Calculate statistics
+        # Summary statistics
         analysis = {}
-        for key, values in perturbation_stats.items():
+        for key, values in stats.items():
             if values:
                 analysis[f'{key}_mean'] = np.mean(values)
                 analysis[f'{key}_std'] = np.std(values)
@@ -316,8 +274,49 @@ class AdversarialAugmenter:
         
         logger.info(
             f"Perturbation analysis: "
-            f"mean L2 norm = {analysis.get('l2_norm_mean', 0):.6f}, "
-            f"mean SNR = {analysis.get('snr_db_mean', 0):.2f} dB"
+            f"L2={analysis.get('l2_norm_mean', 0):.6f}, "
+            f"SNR={analysis.get('snr_db_mean', 0):.1f}dB"
         )
         
         return analysis
+
+
+def train_balanced_baseline_for_adversarial(dataset_manager, config, 
+                                           dataset_size: str, keywords: List[str]):
+    """
+    Train a BALANCED baseline model for adversarial generation.
+    
+    CRITICAL FIX: The baseline model must be trained on balanced data,
+    not the imbalanced experimental data.
+    """
+    from model_training import ModelTrainer
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    logger.info("Training BALANCED baseline model for adversarial generation")
+    
+    # Load dataset
+    audio_files, labels = dataset_manager.load_dataset(dataset_size)
+    
+    # Create BALANCED split (ratio=1.0)
+    audio_files, labels = dataset_manager.create_imbalanced_split(
+        audio_files, labels, keywords, imbalance_ratio=1.0  # ← BALANCED
+    )
+    
+    # Train/test split
+    train_audio, train_labels, test_audio, test_labels = dataset_manager.split_train_test(
+        audio_files, labels, test_ratio=0.2, random_state=42
+    )
+    
+    # Train model
+    trainer = ModelTrainer()
+    logger.info("Training balanced baseline (this may take a few minutes)...")
+    
+    metrics, baseline_model = trainer.full_training_pipeline(
+        train_audio, train_labels, test_audio, test_labels, config
+    )
+    
+    logger.info(f"Baseline model trained: F1={metrics['f1_keyword']:.3f}")
+    
+    return baseline_model

@@ -1,5 +1,5 @@
 """
-Main experiment runner for systematic class imbalance augmentation study.
+Fixed experiment runner with corrected adversarial training baseline.
 """
 import torch
 import numpy as np
@@ -11,34 +11,98 @@ import logging
 
 from config import ExperimentConfig
 from dataset_manager import GSCDatasetManager
-from augmentation_manager import AugmentationManager
 from model_training import ModelTrainer
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+
+def train_balanced_baseline_for_adversarial(dataset_manager: GSCDatasetManager,
+                                           config: ExperimentConfig,
+                                           dataset_size: str) -> torch.nn.Module:
+    """
+    Train a BALANCED baseline model for adversarial generation.
+    
+    CRITICAL FIX: The baseline must be trained on BALANCED data so it actually
+    learns to distinguish keywords from non-keywords.
+    
+    Args:
+        dataset_manager: Dataset manager instance
+        config: Experiment configuration
+        dataset_size: Size of dataset to use ('small', 'medium', 'large')
+    
+    Returns:
+        Trained baseline model
+    """
+    logger.info(f"Training BALANCED baseline model for adversarial generation ({dataset_size})")
+    
+    try:
+        # Load dataset
+        audio_files, labels = dataset_manager.load_dataset(dataset_size)
+        
+        # Create BALANCED split (ratio=1.0 means 50/50 split)
+        audio_files, labels = dataset_manager.create_imbalanced_split(
+            audio_files, labels, 
+            config.target_keywords, 
+            imbalance_ratio=1.0  # ← BALANCED (50% positive, 50% negative)
+        )
+        
+        # Train/test split
+        train_audio, train_labels, test_audio, test_labels = dataset_manager.split_train_test(
+            audio_files, labels, test_ratio=0.2, random_state=42
+        )
+        
+        # Train model with same config as experiments
+        trainer = ModelTrainer()
+        
+        logger.info(f"Training baseline: {len(train_audio)} train, {len(test_audio)} test samples")
+        
+        metrics, baseline_model = trainer.full_training_pipeline(
+            train_audio, train_labels, test_audio, test_labels, config
+        )
+        
+        logger.info(f"✓ Baseline trained successfully (F1={metrics['f1_keyword']:.3f})")
+        
+        return baseline_model
+        
+    except Exception as e:
+        logger.error(f"Failed to train baseline model: {e}")
+        return None
+
+
 class ExperimentRunner:
-    """Orchestrates systematic experimental evaluation"""
+    """Orchestrates systematic experimental evaluation with FIXED adversarial augmentation"""
     
     def __init__(self, config: ExperimentConfig):
         self.config = config
         self.save_dir = Path(config.save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
         
-        # ensure dataset root directory exists
-        Path(config.dataset_root).mkdir(parents=True, exist_ok=True)        
-  
-        # Initialize components with vocabulary control
+        # Ensure dataset root directory exists
+        Path(config.dataset_root).mkdir(parents=True, exist_ok=True)
+        
+        # Initialize components
         self.dataset_manager = GSCDatasetManager(
             root_dir=config.dataset_root,
             version=config.dataset_version,
-            target_keywords=config.target_keywords  # Only need positive keywords
+            target_keywords=config.target_keywords
         )
         
-        self.augmentation_manager = AugmentationManager(
-            fgsm_epsilon=config.fgsm_epsilon,
-            synthetic_dataset_path=config.synthetic_dataset_path
-        )
+        # Initialize augmentation manager
+        # Import the appropriate manager based on config
+        if hasattr(config, 'use_improved_augmentation') and config.use_improved_augmentation:
+            logger.info("Using ImprovedAugmentationManager with mixed strategies")
+            from improved_augmentation_manager import ImprovedAugmentationManager
+            self.augmentation_manager = ImprovedAugmentationManager(
+                synthetic_dataset_path=config.synthetic_dataset_path
+            )
+        else:
+            logger.info("Using standard AugmentationManager")
+            from augmentation_manager import AugmentationManager
+            self.augmentation_manager = AugmentationManager(
+                fgsm_epsilon=config.fgsm_epsilon,
+                synthetic_dataset_path=config.synthetic_dataset_path
+            )
         
         self.model_trainer = ModelTrainer()
         
@@ -46,12 +110,12 @@ class ExperimentRunner:
         self.results = []
         self.experiment_metadata = {}
         
-        # CACHE: Pre-load datasets once to avoid reloading for every experiment
+        # CACHE: Pre-load datasets once
         self.dataset_cache = {}
         
         # Setup logging
         self._setup_experiment_logging()
-        
+    
     def _setup_experiment_logging(self):
         """Setup detailed logging for experiments"""
         log_file = self.save_dir / 'experiment.log'
@@ -67,7 +131,7 @@ class ExperimentRunner:
         logger.addHandler(file_handler)
         logger.info("Experiment logging initialized")
         logger.info(f"Vocabulary - Positive: {self.config.target_keywords}")
-        logger.info(f"Vocabulary - Negative: All other words (realistic keyword spotting)")
+        logger.info(f"Vocabulary - Negative: All other words")
     
     def set_random_seed(self, seed: int):
         """Set random seed for reproducibility"""
@@ -78,11 +142,7 @@ class ExperimentRunner:
             torch.cuda.manual_seed_all(seed)
     
     def _load_base_dataset_cached(self, dataset_size: str) -> Tuple[List[torch.Tensor], List[str]]:
-        """
-        Load base dataset with caching to avoid reloading for every experiment.
-        
-        The dataset is loaded once per size and reused across all experiments.
-        """
+        """Load base dataset with caching"""
         if dataset_size not in self.dataset_cache:
             logger.info(f"Loading {dataset_size} dataset (first time - will be cached)")
             print(f"\n🔄 Loading {dataset_size} dataset for the first time...")
@@ -97,7 +157,7 @@ class ExperimentRunner:
             logger.info(f"Using cached {dataset_size} dataset")
             audio_files, labels = self.dataset_cache[dataset_size]
         
-        # Return a copy to avoid modifying the cached version
+        # Return a copy
         return audio_files.copy(), labels.copy()
     
     def run_single_experiment(self, dataset_size: str, imbalance_ratio: float,
@@ -128,22 +188,39 @@ class ExperimentRunner:
             
             # Apply augmentation to training set only
             if augmentation_method != 'none':
-                train_audio, train_labels = self.augmentation_manager.apply_augmentation(
-                    train_audio, train_labels, augmentation_method,
-                    self.config.target_keywords, imbalance_ratio
-                )
+                # Get max_synthetic_ratio from config if available
+                max_synthetic_ratio = getattr(self.config, 'max_synthetic_ratio', 0.3)
                 
-                # Validate augmented dataset
-                if not self.augmentation_manager.validate_augmented_dataset(train_audio, train_labels):
-                    raise RuntimeError("Augmented dataset validation failed")
+                # Call augmentation with proper parameters
+                if hasattr(self.augmentation_manager, 'apply_augmentation'):
+                    # Check if manager accepts max_synthetic_ratio
+                    import inspect
+                    sig = inspect.signature(self.augmentation_manager.apply_augmentation)
+                    
+                    if 'max_synthetic_ratio' in sig.parameters:
+                        train_audio, train_labels = self.augmentation_manager.apply_augmentation(
+                            train_audio, train_labels, augmentation_method,
+                            self.config.target_keywords, imbalance_ratio,
+                            random_state=seed,
+                            max_synthetic_ratio=max_synthetic_ratio
+                        )
+                    else:
+                        # Old interface
+                        train_audio, train_labels = self.augmentation_manager.apply_augmentation(
+                            train_audio, train_labels, augmentation_method,
+                            self.config.target_keywords, imbalance_ratio,
+                            random_state=seed
+                        )
+                    
+                    # Validate augmented dataset
+                    if hasattr(self.augmentation_manager, 'validate_augmented_dataset'):
+                        if not self.augmentation_manager.validate_augmented_dataset(train_audio, train_labels):
+                            raise RuntimeError("Augmented dataset validation failed")
             
             # Train and evaluate model
             metrics, trained_model = self.model_trainer.full_training_pipeline(
                 train_audio, train_labels, test_audio, test_labels, self.config
             )
-            
-            # Note: We don't update the adversarial model here anymore
-            # It's set once per (dataset_size, imbalance_ratio) in run_experimental_grid()
             
             # Compile results
             result = {
@@ -158,15 +235,13 @@ class ExperimentRunner:
                 **metrics
             }
             
-            logger.info(f"Experiment {experiment_id} completed successfully. "
-                       f"F1 (keyword): {metrics['f1_keyword']:.3f}")
+            logger.info(f"Experiment {experiment_id} completed. F1 (keyword): {metrics['f1_keyword']:.3f}")
             
             return result
             
         except Exception as e:
             logger.error(f"Experiment {experiment_id} failed: {str(e)}")
             
-            # Return failed experiment record
             return {
                 'experiment_id': experiment_id,
                 'dataset_size': dataset_size,
@@ -176,7 +251,6 @@ class ExperimentRunner:
                 'seed': seed,
                 'status': 'failed',
                 'error': str(e),
-                # Zero out metrics for failed experiments
                 **{metric: 0.0 for metric in [
                     'accuracy', 'balanced_accuracy', 'f1_keyword', 'f1_non_keyword', 
                     'precision_keyword', 'recall_keyword', 'auc_roc'
@@ -184,14 +258,18 @@ class ExperimentRunner:
             }
     
     def calculate_total_experiments(self) -> int:
-        """Calculate total number of experiments to run"""
+        """Calculate total number of experiments"""
         return (len(self.config.dataset_sizes) * 
                 len(self.config.imbalance_ratios) * 
                 len(self.config.augmentation_methods) * 
                 self.config.n_trials)
     
     def run_experimental_grid(self):
-        """Execute complete experimental grid"""
+        """
+        Execute complete experimental grid with FIXED adversarial augmentation.
+        
+        Key fix: Train baseline models on BALANCED data for adversarial generation.
+        """
         
         total_experiments = self.calculate_total_experiments()
         logger.info(f"Starting experimental grid: {total_experiments} total experiments")
@@ -206,7 +284,7 @@ class ExperimentRunner:
         
         experiment_count = 0
         
-        # PRE-LOAD: Load all dataset sizes once at the beginning
+        # PRE-LOAD: Load all dataset sizes once
         print("\n" + "="*60)
         print("📦 PRE-LOADING DATASETS (one-time, will be cached)")
         print("="*60)
@@ -216,21 +294,59 @@ class ExperimentRunner:
         print("✓ All datasets cached and ready!")
         print("="*60 + "\n")
         
-        # Nested loops for systematic grid search
+        # Main experimental loop
         for dataset_size in self.config.dataset_sizes:
             for imbalance_ratio in self.config.imbalance_ratios:
                 
-                # TRAIN BASELINE MODEL ONCE per (dataset_size, imbalance_ratio)
-                # This model is used for adversarial augmentation
+                # =====================================================================
+                # CRITICAL FIX: Train BALANCED baseline for adversarial generation
+                # =====================================================================
                 baseline_model = None
-                if 'adversarial' in self.config.augmentation_methods or 'combined' in self.config.augmentation_methods:
-                    logger.info(f"Training baseline model for adversarial generation ({dataset_size}, ratio={imbalance_ratio})")
-                    baseline_model = self._train_baseline_for_adversarial(dataset_size, imbalance_ratio)
-                    if baseline_model:
-                        self.augmentation_manager.set_adversarial_model(baseline_model)
-                        logger.info("Baseline model set for adversarial generation")
+                needs_adversarial = (
+                    'adversarial' in self.config.augmentation_methods or 
+                    'combined' in self.config.augmentation_methods
+                )
                 
+                if needs_adversarial:
+                    print(f"\n{'='*60}")
+                    print(f"🔧 Training BALANCED baseline for adversarial generation")
+                    print(f"   Dataset: {dataset_size}, Imbalance ratio: {imbalance_ratio}")
+                    print(f"{'='*60}")
+                    
+                    baseline_model = train_balanced_baseline_for_adversarial(
+                        self.dataset_manager,
+                        self.config,
+                        dataset_size
+                    )
+                    
+                    if baseline_model:
+                        # Set the baseline model in augmentation manager
+                        if hasattr(self.augmentation_manager, 'set_adversarial_model'):
+                            self.augmentation_manager.set_adversarial_model(baseline_model)
+                            logger.info("✓ Baseline model set for adversarial generation")
+                        elif hasattr(self.augmentation_manager, 'adversarial_augmenter'):
+                            # For improved augmentation manager
+                            from fixed_adversarial_augmenter import FixedAdversarialAugmenter
+                            
+                            # Replace with fixed version
+                            self.augmentation_manager.adversarial_augmenter = FixedAdversarialAugmenter(
+                                epsilon=0.005  # REDUCED from 0.01
+                            )
+                            self.augmentation_manager.adversarial_augmenter.set_target_model(baseline_model)
+                            logger.info("✓ Fixed adversarial augmenter configured")
+                        
+                        print("✓ Baseline model ready for adversarial generation\n")
+                    else:
+                        print("⚠️  Failed to train baseline model")
+                        print("   Adversarial experiments will be skipped\n")
+                
+                # Run experiments for all augmentation methods
                 for aug_method in self.config.augmentation_methods:
+                    # Skip adversarial if baseline failed
+                    if aug_method in ['adversarial', 'combined'] and baseline_model is None:
+                        logger.warning(f"Skipping {aug_method} (no baseline model)")
+                        continue
+                    
                     for trial in range(self.config.n_trials):
                         
                         result = self.run_single_experiment(
@@ -248,8 +364,13 @@ class ExperimentRunner:
                         
                         # Progress logging
                         progress = (experiment_count / total_experiments) * 100
-                        logger.info(f"Progress: {experiment_count}/{total_experiments} "
-                                   f"({progress:.1f}%)")
+                        logger.info(f"Progress: {experiment_count}/{total_experiments} ({progress:.1f}%)")
+                        
+                        print(f"\n{'='*60}")
+                        print(f"✓ Completed: {aug_method} | ratio={imbalance_ratio} | trial={trial}")
+                        print(f"   F1 (keyword): {result.get('f1_keyword', 0):.3f}")
+                        print(f"   Progress: {experiment_count}/{total_experiments} ({progress:.1f}%)")
+                        print(f"{'='*60}\n")
                         
                         # Save intermediate results
                         if self.config.save_intermediate and experiment_count % 10 == 0:
@@ -258,46 +379,6 @@ class ExperimentRunner:
         # Save final results
         self._save_final_results()
         logger.info("Experimental grid completed!")
-    
-    def _train_baseline_for_adversarial(self, dataset_size: str, imbalance_ratio: float):
-        """
-        Train a baseline model for adversarial generation.
-        
-        This model is trained once per (dataset_size, imbalance_ratio) combination
-        and used to generate adversarial examples for all trials.
-        """
-        try:
-            print(f"\n🔧 Training baseline model for adversarial generation...")
-            print(f"   Dataset: {dataset_size}, Ratio: {imbalance_ratio}")
-            
-            # Use fixed seed for reproducibility
-            seed = 42
-            self.set_random_seed(seed)
-            
-            # Load and prepare data
-            audio_files, labels = self._load_base_dataset_cached(dataset_size)
-            audio_files, labels = self.dataset_manager.create_imbalanced_split(
-                audio_files, labels, self.config.target_keywords, imbalance_ratio
-            )
-            train_audio, train_labels, _, _ = self.dataset_manager.split_train_test(
-                audio_files, labels, test_ratio=0.2, random_state=seed
-            )
-            
-            # Train model (no augmentation for baseline)
-            print("   Training baseline model (this may take a few minutes)...")
-            _, baseline_model = self.model_trainer.full_training_pipeline(
-                train_audio, train_labels, train_audio[:10], train_labels[:10],  # Dummy test set
-                self.config
-            )
-            
-            print("✓ Baseline model ready for adversarial generation\n")
-            return baseline_model
-            
-        except Exception as e:
-            logger.error(f"Failed to train baseline model: {e}")
-            print(f"⚠️  Could not train baseline model: {e}")
-            print("   Adversarial experiments will be skipped")
-            return None
     
     def _save_intermediate_results(self, experiment_count: int):
         """Save intermediate results during long experiments"""
@@ -332,35 +413,34 @@ class ExperimentRunner:
     
     def _generate_summary_statistics(self, results_df: pd.DataFrame):
         """Generate and save summary statistics"""
-    
-        # Check if 'status' column exists, if not, assume all experiments succeeded
+        
+        # Check if 'status' column exists
         if 'status' in results_df.columns:
             successful_count = len(results_df[results_df['status'] != 'failed'])
             failed_count = len(results_df[results_df['status'] == 'failed'])
         else:
-            # No status column means all experiments succeeded
             successful_count = len(results_df)
             failed_count = 0
-    
+        
         summary_stats = {
             'total_experiments': len(results_df),
             'successful_experiments': successful_count,
             'failed_experiments': failed_count,
         }
-    
+        
         # Performance statistics by method
         if 'f1_keyword' in results_df.columns:
             method_performance = results_df.groupby('augmentation_method')['f1_keyword'].agg([
                 'mean', 'std', 'min', 'max', 'count'
             ]).round(4)
-        
+            
             summary_stats['method_performance'] = method_performance.to_dict()
-    
+        
         # Save summary
         summary_file = self.save_dir / 'experiment_summary.json'
         with open(summary_file, 'w') as f:
             json.dump(summary_stats, f, indent=2)
-    
+        
         logger.info("Generated experiment summary statistics")
 
 
